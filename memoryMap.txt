@@ -1,0 +1,2 @@
+0x7C00		200h		Bootsector
+0x7E00				GDT
