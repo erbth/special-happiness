@@ -45,6 +45,11 @@ mainloop:
 	jc .print_hex
 
 	mov si, buffer
+	mov di, cmd_print_dec  ; "print_dec" command
+	call strcmp
+	jc .print_dec
+
+	mov si, buffer
 	mov di, cmd_ticks  ; "ticks" command
 	call strcmp
 	jc .ticks
@@ -93,6 +98,27 @@ mainloop:
 
 	jmp mainloop
 
+.print_dec:
+	xor bx,bx
+
+.print_dec_loop:
+	push bx
+	mov ax, [.print_dec_values+bx]
+	call print_dec
+
+	mov si, crlf
+	call print_string
+	pop bx
+
+	inc bx
+	cmp bx, [.print_dec_values_count]
+	jb .print_dec_loop
+
+	jmp mainloop
+
+.print_dec_values dw 0, 1, 10, 17, 122, 65535
+.print_dec_values_count dw ($-.print_dec_values) / 2
+
 .ticks:
 	mov ah, 0
 	int 80h
@@ -129,19 +155,15 @@ mainloop:
 	mov ah, 0
 	int 80h    ; CX = hour, DX = sub-hour
 
-	mov ax, cx
-	call print_hex
-
-	mov si, msg_time
-	call print_string
-
 	mov ax, dx
 	xor dx, dx
 
-	mov cx, 1092
-	div cx
+	mov bx, 1092
+	div bx
 
-	call print_hex
+	shl cx, 8
+	or ax, cx
+	call print_time
 
 	mov si, crlf
 	call print_string
@@ -176,6 +198,7 @@ prompt db '>', 0
 crlf db 0x0D, 0x0A, 0
 cmd_hi db 'hi', 0
 cmd_print_hex db 'print_hex', 0
+cmd_print_dec db 'print_dec', 0
 cmd_ticks db 'ticks', 0
 cmd_random db 'random', 0
 cmd_time db 'time', 0
@@ -186,8 +209,7 @@ msg_hi   db 'Hello OSDev World!', 0x0D, 0x0A, 0
 msg_ticks:
  .1 db 'Timer ticks since midnight: ', 0
  .2 db ':', 0
-msg_time db ':', 0
-msg_help db 'My OS: Commands: hi, print_hex, ticks, random, time, 1sek, 5sek, help', 0x0D, 0x0A, 0
+msg_help db 'My OS: Commands: hi, print_hex, print_dec, ticks, random, time, 1sek, 5sek, help', 0x0D, 0x0A, 0
 buffer times 64 db 0
 
 ; ================
@@ -356,6 +378,86 @@ print_hex:
 	ret
 
 .temp dw 0
+
+; AX [IN] = word to print, leading zeros are ommited
+print_dec:
+	mov bx, 3  ; maximum of 5 digits, 4 rounds to go
+	mov byte [.temp], 0
+
+.loop:
+	xor dx, dx
+	div word [.coeffs+bx]  ; calculate digit
+
+	push dx                ; store remainder
+
+	cmp byte [.temp], 1
+	je .nonzero            ; don't suppress if zero isn't not leading
+
+	or ax,ax
+	jz .zero               ; suppress leading zeros
+
+	mov byte [.temp], 1    ; remember nonzero digit
+
+.nonzero:
+	push bx
+	call print_dec_digit   ; print digit
+	pop bx
+
+.zero:
+	pop ax                 ; remainder is new input
+
+	sub bx, 1
+	jnc .loop
+
+	call print_dec_digit   ; print least significant digit
+
+	ret
+
+.coeffs dw 10, 100, 1000, 10000
+.temp db 0
+
+; prints decimal digit in al
+print_dec_digit:
+	add al, 30h
+	mov ah, 0Eh
+	int 10h
+	ret
+
+; AH [IN] = hours
+; AL [IN] = minutes
+print_time:
+	mov [.temp], al
+	mov al, ah
+
+	daa
+	call print_packed_bcd
+
+	mov al, ':'
+	mov ah, 0Eh
+	int 10h
+
+	mov al, [.temp]
+
+	daa
+	call print_packed_bcd
+
+	ret
+
+.temp db 0
+
+; [AL] = packed bcd pair to print
+print_packed_bcd:
+	mov [.temp], al
+	shr al, 4
+	call print_dec_digit
+
+	mov al, [.temp]
+	and al, 0Fh
+	call print_dec_digit
+
+	ret
+
+.temp db 0
 
 
 afterCode:
