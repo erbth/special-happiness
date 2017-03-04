@@ -37,7 +37,7 @@ load_kernel:
 	; determine kernel size and load subsequent blocks
 	mov cx, [0x7E00]
 
-	mov si, msgKernelSize
+	mov si, msgStage2Size
 	call print_string
 
 	mov ax,cx
@@ -60,23 +60,20 @@ load_kernel:
 	jc halt_error
 
 .done:
-	; open address line 20
-
-	mov si, msgOK
+	mov si, msgStage2
 	call print_string
 
-	; create segment table
-	call create_GDT
+	jmp 0x7E04    ; stage 2
 
-	; switch to protected mode
-	; flush segment registers and jump to entrance
+	jmp halt_error  ; should never be reached
+
 
 ; ===================================
 ; global messages and data structures
 ; ===================================
 
-msgKernelSize db 'Kernel size: ',0
-msgOK db 'OK.', 0x0D, 0x0A, 0
+msgStage2Size db 'Stage 2 size: ',0
+msgStage2 db 'Transfering control to stage 2.', 0x0D, 0x0A, 0
 msgCRLF db 13,10,0
 
 floppy:
@@ -196,60 +193,6 @@ drive_read_block:
 	pop ax
 	ret
 
-; Creates the global descriptor table
-create_GDT:
-	xor ax,ax
-	mov [GDT], ax
-	mov [GDT+2], ax
-	mov [GDT+4], ax
-	mov [GDT+6], ax  ; null descriptor
-
-
-; Code descriptor
-; 31 ...... 24, 23,   22,     21,   20,   19 ...... 16, 15,   14, 13, 12,   11,       10,   9,    8,    7 ......... 0
-; ------------------------------------------------------------------------------------------------------------------|
-; | Base 31:24 | G=0 | D/B=1 | L=0 | AVL | Limit 19:26 | P=1 | DPL=0 | S=1 | Code(1) | C=0 | R=0 | A=0 | Base 23:16 |
-; |-----------------------------------------------------------------------------------------------------------------|
-; |                         Base 15:0                  |                       Limit 15:0                           |
-; -------------------------------------------------------------------------------------------------------------------
-
-%macro descriptor_bit(S,D) 2
-	mov cx, [S]
-	and cx, 1h
-	shl cx, D
-	or bx, cx
-%endmacro
-
-; AX [IN] = destination
-; code_descriptor [IN] = descriptor
-create_descriptor:
-	mov bx, [codedescriptor.limit]
-	mov [ax], bx
-
-	mov bx, [codedescriptor.base]
-	mov [ax], bx
-
-	mov bx, [codedescriptor.base+2]
-	and bx, 0Fh
-
-	descriptor_bit
-
-
-
-code_descriptor:
- .base dw 0
- .limit dw 0
- .G db 0
- .D_B db 1
- .L db 0
- .AVL db 0
- .P db 1
- .DPL db 0
- .S db 1
- .Code db 1
- .C db 0
- .R db 0
- .A db 0
 
 ; loads multiple blocks (each 512 bytes) from a drive
 ; AX [IN] = LBA start address,
