@@ -1,6 +1,7 @@
 NASM=nasm
 CAT=cat
 DD=dd
+SUDO=sudo
 
 FD=/dev/fd0
 
@@ -21,4 +22,4 @@ clean:
 	rm -f *.bin
 
 floppy: MyOS.bin
-	$(DD) if=$< of=$(FD)
+	$(SUDO) $(DD) if=$< of=$(FD)
