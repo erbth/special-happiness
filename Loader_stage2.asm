@@ -1,8 +1,6 @@
 section .text
-org 0x7E00
+; org 0x7E00  ; done by linker
 bits 16
-
-dd after_code-$$ ;  size of stage 2
 
 entry:
 	; open address line 20
@@ -1104,6 +1102,10 @@ PIT_init_ticks:
 ; Purpose:    to wait for a specific delay (using IRQ0 and the PIT) in a fully
 ;             state-preserving way (except EFLAGS). Make sure to setup the PIT
 ;             and the IRQ0 handler before. Interrupts must be enabled.
+;             If you want to make sure that execution is paused for at least the
+;             specified delay, add 1 to the delay. Execution might be paused for
+;             up to 1 ms less during to the timer interrupt beeing not synchronized
+;             with the begin of sleeping periods.
 ; Parameters: EAX [IN] = time to sleep in milliseconds
 sleep:
 	pushfd
@@ -1128,8 +1130,3 @@ ypos db 0
 
 sleep_engaged db 0
 sleep_delay   dd 0
-
-
-times 512 - (($-$$) % 512) db 0  ; easier if size of stage 2 is aligned to block
-                                 ; size
-after_code:

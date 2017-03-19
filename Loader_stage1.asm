@@ -5,7 +5,7 @@
 
 section .text
 
-org 0x7C00	; add 0x7C00 to label addresses
+; org 0x7C00	; done by linker
 bits 16		; tell the assembler we want 16 bit code
 
 	mov ax, 0
@@ -14,7 +14,8 @@ bits 16		; tell the assembler we want 16 bit code
 	mov ss, ax
 	mov sp, 0x7C00
 
-load_kernel:
+	; global loader_stage1_start
+loader_stage1_start:
 	; load kernel from floppy
 	mov dl, 0
 	call get_drive_geometry
@@ -26,35 +27,17 @@ load_kernel:
 	mov [floppy.NumberOfHeads], dh
 	mov [floppy.SectorsPerTrack], cl
 
-	; load first block, which contains the kernel size dword
-	mov ax,1
-	mov dl,0
-	mov di,0x7E00
-	call drive_read_block
-
-	jc halt_error
-
-	; determine kernel size and load subsequent blocks
-	mov cx, [0x7E00]
-
-	mov si, msgStage2Size
-	call print_string
-
-	mov ax,cx
-	call print_hex
-	PRINT_CRLF
+	; load blocks containing stage 2
+	mov cx, (STAGE2_SIZE + 1FFh) / 200h  ; compute blocks to load
+	                                     ; STAGE2_SIZE is defined on commandline after
+	                                     ; stage 2 is linked.
 
 	or cx,cx
-	jz .done    ; if kernel size is zero, we are done.
+	jz .stage2zero   ; if stage 2 size is zero, there's nothing to load.
 
-
-	add cx,0x1FF
-	shr cx, 9     ; divide by 512 rounding up
-
-	sub cx, 1
-	mov ax, 2
+	mov ax, 1
 	mov dl, 0
-	mov di, 0x8000
+	mov di, 0x7E00
 
 	call drive_read  ; otherwise, read remaining blocks
 	jc halt_error
@@ -63,16 +46,24 @@ load_kernel:
 	mov si, msgStage2
 	call print_string
 
-	jmp 0x7E04    ; stage 2
+	jmp 0x7E00       ; stage 2
 
-	jmp halt_error  ; should never be reached
+	jmp halt_error   ; should never be reached
+
+.stage2zero:
+	mov si, msgStage2zero
+	call print_string
+
+.loop:
+	hlt
+	jmp .loop  ; who knows, maybe SMI will trigger an interrupt
 
 
 ; ===================================
 ; global messages and data structures
 ; ===================================
 
-msgStage2Size db 'Stage 2 size: ',0
+msgStage2zero db 'Stage 2 has size 0.',0
 msgStage2 db 'Transfering control to stage 2.', 0x0D, 0x0A, 0
 msgCRLF db 13,10,0
 
