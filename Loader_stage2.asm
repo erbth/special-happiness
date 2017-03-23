@@ -436,6 +436,14 @@ print_hex:
 ; ====================================
 ; protected mode execution starts here
 ; ====================================
+; symbolic constants
+TEXT_VIDEO_START equ 0xB8000
+
+; extern symbols
+extern floppy_init, floppy_timer, floppy_get_drive_type, floppy_get_reset_count
+extern floppy_get_error_count, floppy_IRQ6_handler, floppy_debug_update
+extern floppy_debug_set
+
 bits 32
 entry_of_protected_mode:
 	; load segment registers
@@ -450,86 +458,175 @@ entry_of_protected_mode:
 		       ; might be better to not rely on that. This way it doesn't
 		       ; matter if an interrupt occurs between those two instructions.
 
-	call clear_screen
+	call screen_clear
+	call screen_home
 
 	mov esi, .p_msgPModeEntered
 	call p_print_string
 
 	; setup IDT and enable interrupts
-	call create_IDT  ; NMI will be enabled afterwards
-	call init_PICs   ; init PICs and set vector offsets
+	call create_IDT    ; NMI will be enabled afterwards
+	call init_PICs     ; init PICs and set vector offsets, all IRQs are masked
 
-	sti              ; enable regular interrupts
+	sti                ; enable regular interrupts
+
+	; set floppy debug view
+	mov eax, TEXT_VIDEO_START + 15 * 80 * 2  ; line 15
+	call floppy_debug_set                    ; set floppy debug video memory
 
 	; initialize PIT, f_ticks = 1000 Hz
 	mov ebx, 1000 << 8   ; 24.8 fixed
 	call PIT_init_ticks
 
-	xor ecx, ecx
-.loop:
-	mov eax, ecx
-	call p_print_hex
-
-	mov esi, .p_msgSeconds
+	; initialize floppy
+	mov esi, .p_msgFloppyInitializing
 	call p_print_string
 
-	mov eax, 1000
-	call sleep     ; wait 1 second
+	call floppy_init    ; initialize floppy subsystem
+	or eax, eax         ; is EAX 0?
+	jnz .floppy_failed  ; if not, print error message
 
-	inc ecx
+	mov esi, .p_msgOK		; otherwise, print OK
+	call p_print_string
 
-	jmp .loop
+	call .floppy_info
+
+	jmp .end  ; done
+
+.end:
+	hlt
+	jmp .end
+
+; error handlers
+.floppy_failed:
+	mov esi, .p_msgFailed  ; print error message
+	call p_print_string
+
+	call .floppy_info
+	jmp .end
+
+
+.floppy_info:
+	call floppy_get_drive_type	; retrieve detected drive type
+	mov esi, eax			; prepare parameter
+	call p_print_string		; print it
+
+	mov esi, .p_msgFloppyResetCount  ; print floppy controller reset count message
+	call p_print_string
+
+	call floppy_get_reset_count      ; retrieve floppy controller reset count
+	call p_print_hex                 ; print reset count
+
+	mov esi, p_msgCRLF               ; print CRLF
+	call p_print_string
+
+	mov esi, .p_msgFloppyErrorCount ; print floppy error count message
+	call p_print_string
+
+	call floppy_get_error_count	; retrieve floppy error count
+	call p_print_hex		; print error count
+
+	mov esi, p_msgCRLF		; print CRLF
+	call p_print_string
+	ret
+
 
 ; --- Messages ---
 .p_msgPModeEntered db 'Entered protected mode.', 0x0D, 0x0A, 0
-.p_msgSeconds db 'h seconds', 0x0D, 0
-p_msgCrLf db 0x0D, 0x0A, 0
+.p_msgFloppyInitializing db 'Initializing floppy (controller and driver) ... ', 0
+.p_msgFloppyResetCount db 'floppy controller reset count: 0x', 0
+.p_msgFloppyErrorCount db 'floppy error count: 0x', 0
+.p_msgOK db '[ OK ].', 0x0D, 0x0A, 0
+.p_msgFailed db '[failed]', 0x0D, 0x0A, 0
+p_msgCRLF db 0x0D, 0x0A, 0
 
 
 ; =======================
 ; 32 bit calls start here
 ; =======================
-; Function:   clear_screen
+
+; =================
+; formatting output
+; =================
+
+; Function:   screen_clear
 ; Purpose:    to clear the screen, remove all characters and position the cursor
 ;             in the sop left corner
 ; Parameters: none
-clear_screen:
+screen_clear:
 	xor ax, ax
-	mov edi, 0xB8000     ; start of text video memory
-	mov ecx, 80 * 25     ; 80 * 25 characters
+	mov edi, TEXT_VIDEO_START	; start of text video memory
+	mov ecx, 80 * 25		; 80 * 25 characters
 
-.loop:
-	stosw
-	loop .loop
+	cld
+	rep stosw			; rep prefix
 
-	mov byte [xpos], al  ; position the cursor in the top left corner
+	mov byte [xpos], al		; position the cursor in the top left corner
 	mov byte [ypos], al
 	ret
 
-; Function: p_print_string
-; Purpose: to print a zero-terminated string in protected mode (without the BIOS)
+; Function:   screen_home
+; Purpose:    to generate the basic layout of the screen in a fully processor
+;             state preserving way (except EFLAGS).
+; Parameters: none
+screen_home:
+	push eax  ; save registers
+	push ecx
+	push edi
+
+	mov edi, TEXT_VIDEO_START + 14 * 80 * 2	; line 14 (2 bytes per character)
+	mov ecx, 80				; 80 characters per line
+	mov ah, 04h				; attrib: red on black
+	mov al, '='				; symbol
+
+	cld
+	rep stosw				; rep prefix
+
+	pop edi  ; restore registers
+	pop ecx
+	pop eax
+	ret
+
+; Function:   p_print_string
+; Purpose:    to print a zero-terminated string in protected mode (without the BIOS)
+;             in a fully state preserving way (except EFLAGS).
 ; Parameters: ESI [IN] = start address
-; Returns: nothing
+; Returns:    nothing
+global p_print_string
 p_print_string:
+	push eax  ; save registers
+	push esi
+
+	cld
+
+.loop:
 	lodsb
 	or al, al
 	jz .done   ; zero-byte, we are done
 
 	call p_putchar
-	jmp p_print_string
+	jmp .loop
 
 .done:
+	pop esi  ; restore registers
+	pop eax
 	ret
 
 ; Function:   p_print_hex
-; Purpose:    to print a hex value in protected mode
-; Parameters: eax
+; Purpose:    to print a hex value in protected mode in a fully state preserving
+;             way (except EFLAGS).
+; Parameters: EAX [IN] = number to print
 ; see:        http://wiki.osdev.org/Real_mode_assembly_II
+global p_print_hex
 p_print_hex:
+	push eax
+
 	call .word
 	mov eax, [.temp]
 	rol eax, 16
 	call .word
+
+	pop eax
 	ret
 
 .word:
@@ -558,7 +655,6 @@ p_print_hex:
 	das
 
 	call p_putchar
-
 	ret
 
 .temp dd 0
@@ -571,6 +667,7 @@ p_print_hex:
 ; Returns: nothing
 ;
 ; see http://wiki.osdev.org/Babystep4
+global p_putchar
 p_putchar:
 	push eax
 	push ebx
@@ -620,7 +717,7 @@ p_putchar:
 	inc al
 
 	xor ah, ah
-	mov bl, 25
+	mov bl, 14  ; leave some space for status information
 	div bl
 
 	mov [ypos], ah
@@ -651,7 +748,7 @@ create_IDT:
 	; Register #DE handler
 	mov eax, isr_DE
 	mov ebx, IDT
-	add ebx, 0h * 8  ; #DE is vector nr. 0
+	add ebx, 0h * 8  ; #DE is vector no. 0
 	mov edx, 1       ; present
 
 	call encode_IDT_entry
@@ -659,34 +756,40 @@ create_IDT:
 	; register NMI handler
 	mov eax, isr_NMI
 	mov ebx, IDT
-	add ebx, 2h * 8  ; NMI is vector nr. 2
+	add ebx, 2h * 8  ; NMI is vector no. 2
 	mov edx, 1       ; present
 
 	call encode_IDT_entry
 
 	; register Double Fault Exception handler
 	mov eax, isr_DF
-	mov ebx, IDT + 8h * 8  ; #DF is vector nr. 8
+	mov ebx, IDT + 8h * 8  ; #DF is vector no. 8
 	mov edx, 1             ; present
 	call encode_IDT_entry
 
 	; register handler for Segment Not Present exceptions
 	mov eax, isr_NP
-	mov ebx, IDT + 0Bh * 8  ; #NP is vector nr. 11
+	mov ebx, IDT + 0Bh * 8  ; #NP is vector no. 11
 	mov edx, 1              ; present
 	call encode_IDT_entry
 
 	; register GPF handler
 	mov eax, isr_GPF
 	mov ebx, IDT
-	add ebx, 0Dh * 8  ; #GP is vector nr. 0x0D
+	add ebx, 0Dh * 8  ; #GP is vector no. 0x0D
 	mov edx, 1        ; present
 
 	call encode_IDT_entry
 
 	; register IRQ0 handler
 	mov eax, isr_IRQ0_PIT
-	mov ebx, IDT + 20h * 8  ; IRQ0 is vector nr. 20h
+	mov ebx, IDT + 20h * 8  ; IRQ0 is vector no. 20h
+	mov edx, 1              ; present
+	call encode_IDT_entry
+
+	; register IRQ6 handler
+	mov eax, floppy_IRQ6_handler
+	mov ebx, IDT + 26h * 8  ; IRQ6 is vector no. 26h
 	mov edx, 1              ; present
 	call encode_IDT_entry
 
@@ -736,7 +839,7 @@ load_IDTR:
 		      ; Therefore, in aspect of NMIs, each instruction is atomic.
 
 	in al, 0x70
-	and al, 0x7E
+	and al, 0x7F
 	out 0x70, al  ; enable NMI
 
 	ret
@@ -932,14 +1035,17 @@ isr_GPF:
 .msg db 'Exception: General Protection Fault', 0x0D, 0x0A, 0
 
 ; Function:   isr_NMI
-; Purpose:    to handle Non-maskable Interrupts
-;
+; Purpose:    to handle Non-maskable Interrupts by aborting execution
 isr_NMI:
 	push eax  ; save eax, modified by p_print_string
 	push esi
 
 	mov esi, .msg
 	call p_print_string
+
+.endless_loop:
+	hlt                ; halt the processor
+	jmp .endless_loop  ; just in case of SMI
 
 	pop esi  ; restore registers
 	pop eax
@@ -952,6 +1058,11 @@ isr_NMI:
 ;               * Timer for sleep function
 isr_IRQ0_PIT:
 	push eax
+
+	call floppy_timer		; floppy timer for motors (and possibly
+	                                ; other things), interrupts are disabled
+
+	call .update_debug_views	; update debug view(s)
 
 	cmp byte [sleep_engaged], 0	; is a sleep to be performed currently?
 	je .end				; if not, we're done
@@ -967,6 +1078,20 @@ isr_IRQ0_PIT:
 
 	pop eax
 	iretd
+
+.update_debug_views:
+	inc byte [debug_update_counter]		; simple prescaler
+	cmp byte [debug_update_counter], 33	; / 33
+	jb .no_action				; not reached yet
+
+	xor al, al
+	mov byte [debug_update_counter], al	; clear counter
+
+	call floppy_debug_update		; perform update
+
+.no_action:
+	ret
+
 
 ; ========================
 ; Interfacing with the PIT
@@ -1107,6 +1232,7 @@ PIT_init_ticks:
 ;             up to 1 ms less during to the timer interrupt beeing not synchronized
 ;             with the begin of sleeping periods.
 ; Parameters: EAX [IN] = time to sleep in milliseconds
+global sleep
 sleep:
 	pushfd
 	cli  ; disable interrupts to make writing to the sleep timer registers atomic
@@ -1130,3 +1256,5 @@ ypos db 0
 
 sleep_engaged db 0
 sleep_delay   dd 0
+
+debug_update_counter db 0	; prescaler for updating debug view(s)
