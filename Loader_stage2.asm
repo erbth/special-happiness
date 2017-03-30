@@ -1,4 +1,4 @@
-section .text
+section LOADER
 ; org 0x7E00  ; done by linker
 bits 16
 
@@ -491,21 +491,16 @@ entry_of_protected_mode:
 
 	call .floppy_info  ; print some information
 
-	mov eax, 3000			; wait 3 seconds
-	call sleep
-
-	call screen_clear
-	call screen_home
-
 	mov esi, .p_msgFloppyReading
 	call p_print_string
 
 	mov al, 0			; drive 0
 	extern LOADER_SIZE
 	mov ebx, [LOADER_SIZE]		; bytes
+	add ebx, 1FFh			; round to full blocks
 	shr ebx, 9			; LBA
-	mov ecx, (KERNEL_SIZE + 1FFh) / 200h + 36  ; sector count
-	mov edi, 1000000H		; 16 MB
+	mov ecx, (KERNEL_SIZE + 1FFh) / 200h  ; sector count
+	mov edi, 0x1000000		; 16 MB
 	call floppy_read_data		; read data
 	or eax, eax			; is EAX 0?
 	jnz .floppy_read_error
@@ -513,17 +508,12 @@ entry_of_protected_mode:
 	mov esi, .p_msgOK
 	call p_print_string
 
-	mov eax, 3000
-	call sleep
+	mov esi, .p_msgKernel
+	call p_print_string
 
-	call screen_clear		; clear screen
-	call screen_home
+	mov byte [debug_active], 0	; disable debug views
 
-	mov esi, 1000000H + 36 * 200H	; start address
-	mov byte [esi+KERNEL_SIZE], 0	; zero terminate string, to be sure
-	call p_print_string		; print string
-
-	jmp .end  ; done
+	jmp 0x1000000			; Kernel's entry point
 
 .end:
 	hlt
@@ -574,8 +564,9 @@ entry_of_protected_mode:
 .p_msgFloppyResetCount db 'floppy controller reset count: 0x', 0
 .p_msgFloppyErrorCount db 'floppy error count: 0x', 0
 .p_msgFloppyReading db 'Reading from floppy ... ', 0
-.p_msgOK db '[ OK ].', 0x0D, 0x0A, 0
+.p_msgOK db '[ OK ]', 0x0D, 0x0A, 0
 .p_msgFailed db '[failed]', 0x0D, 0x0A, 0
+.p_msgKernel db 'Transfering execution to the kernel', 0x0D, 0x0A, 0
 p_msgCRLF db 0x0D, 0x0A, 0
 
 
@@ -589,9 +580,15 @@ p_msgCRLF db 0x0D, 0x0A, 0
 
 ; Function:   screen_clear
 ; Purpose:    to clear the screen, remove all characters and position the cursor
-;             in the sop left corner
+;             in the top left corner.
+;             The processor state ins not modified (except EFLAGS).
 ; Parameters: none
+global screen_clear
 screen_clear:
+	push eax  ; save registers
+	push ecx
+	push edi
+
 	xor ax, ax
 	mov edi, TEXT_VIDEO_START	; start of text video memory
 	mov ecx, 80 * 25		; 80 * 25 characters
@@ -601,6 +598,10 @@ screen_clear:
 
 	mov byte [xpos], al		; position the cursor in the top left corner
 	mov byte [ypos], al
+
+	pop edi  ; restore registers
+	pop ecx
+	pop eax
 	ret
 
 ; Function:   screen_home
@@ -1125,6 +1126,9 @@ isr_IRQ0_PIT:
 	iretd
 
 .update_debug_views:
+	cmp byte [debug_active], 0
+	je .no_action
+
 	inc byte [debug_update_counter]		; simple prescaler
 	cmp byte [debug_update_counter], 33	; / 33
 	jb .no_action				; not reached yet
@@ -1303,3 +1307,4 @@ sleep_engaged db 0
 sleep_delay   dd 0
 
 debug_update_counter db 0	; prescaler for updating debug view(s)
+debug_active db 1

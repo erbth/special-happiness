@@ -18,7 +18,6 @@ LOADER=Loader
 LOADER_SIZE_CONSTANTS=Loader_size_constants
 KERNEL=Kernel
 ENTRY=Entry
-TEXT=text
 
 # Order matters!
 BINARY_COMPONENTS= $(LOADER).o $(KERNEL).o
@@ -27,7 +26,7 @@ BINARY_COMPONENTS= $(LOADER).o $(KERNEL).o
 LOADER_COMPONENTS=$(STAGE1).o $(STAGE2).o
 
 # Order matters!
-KERNEL_COMPONENTS=$(ENTRY).o $(TEXT).o
+KERNEL_COMPONENTS=$(ENTRY).o text.o
 
 # Order matters!
 STAGE1_OBJ=Loader_stage1.o
@@ -53,8 +52,7 @@ $(OBJ_DIR)/Loader_stage1.o: Loader_stage1.asm $(OBJ_DIR)/$(STAGE2).o
 	$(NASM) $(NFLAGS) -dSTAGE2_SIZE=$(shell $(SIZE) $(OBJ_DIR)/$(STAGE2).o|$(AWK) 'NR==2{print $$1+$$2+$$3}') -o $@ $<
 
 $(OBJ_DIR)/Loader_stage2.o: Loader_stage2.asm $(OBJ_DIR)/$(KERNEL).o
-	# $(NASM) $(NFLAGS) -dKERNEL_SIZE=$(shell $(SIZE) $(OBJ_DIR)/$(KERNEL).o|$(AWK) 'NR==2{print $$1+$$2+$$3}') -o $@ $<
-	$(NASM) $(NFLAGS) -dKERNEL_SIZE=$(shell ls -l text.txt|$(AWK) '{print $$5}') -o $@ $<
+	 $(NASM) $(NFLAGS) -dKERNEL_SIZE=$(shell $(SIZE) $(OBJ_DIR)/$(KERNEL).o|$(AWK) 'NR==2{print $$1+$$2+$$3}') -o $@ $<
 
 $(OBJ_DIR)/$(LOADER_SIZE_CONSTANTS).o: $(LOADER_SIZE_CONSTANTS).asm $(LOADER_COMPONENTS:%=$(OBJ_DIR)/%)
 	$(NASM) $(NFLAGS) -dSIZE_WITHOUT=$(shell $(SIZE) -t $(LOADER_COMPONENTS:%=$(OBJ_DIR)/%)|$(AWK) 'END{print $$1+$$2+$$3}') -o $@ $<
@@ -64,9 +62,6 @@ $(OBJ_DIR)/$(KERNEL).o: $(KERNEL_COMPONENTS:%=$(OBJ_DIR)/%)
 
 $(OBJ_DIR)/%.o: %.asm
 	$(NASM) $(NFLAGS) -o $@ $<
-
-$(OBJ_DIR)/%.o: %.txt
-	$(OBJCOPY) -I binary -O elf32-i386 -B i386 --rename-section .data=.text $< $@
 
 .PHONY: clean
 clean:

@@ -6,17 +6,7 @@
 ; state in a function in command issuing layer, the function resets the controller
 ; before exiting.
 ;
-; If a certain procedure requires a specific drive to be selected, it should
-; call floppy_reselect_drive before any command (except the first after
-; floppy_drive_select) to make sure, the drive is actually selected. This is
-; because the command issuing functions might perform controller resets which
-; will load default values. This cannot be done automatically in a clean way
-; (same way in every function) without the risk of recursion loops.
-; When a command function requires the correct drive to be selected, it will
-; reselect the drive after it performed a reset and before it retries the command.
-; But after the last reset before a return with error, this is not done.
-;
-; Functions will assume that NMIs are enabled when accessing the CMOS, therfore,
+; Functions will assume that NMIs are enabled when accessing the CMOS, therefore,
 ; if NMIs are disabled, they will be enabled by those functions.
 ;
 ; Todo: HW reset ? currently: nothing will clear the reset flag in the DOR,
@@ -27,6 +17,7 @@
 ;       reset reselect drive
 ;
 ; see http://wiki.osdev.org/FDC
+section LOADER
 bits 32
 
 %macro DEBUG 1
@@ -117,38 +108,21 @@ floppy_init:
 					; might have been asserted before
 	call floppy_wait_IRQ6_end
 
+	call floppy_reset		; perform reset
+
 	call floppy_cmd_version		; issue a version command
 	cmp ax, 90h			; is it a 82077AA or compatible?
 	jne .unsupported_controller	; if not, return
-
-	call floppy_cmd_configure	; issue a configure command
-	or al, al			; quick test for AL 0
-	jnz .configure_error		; return in case of failure
 
 	mov al, 1			; lock settings
 	call floppy_cmd_lock		; issue lock command
 	or al, al			; AL == 0?
 	jnz .lock_error			; return in case of failure
 
-	call floppy_reset	; perform a contoller reset
-	                                ; this will set the Specify Required and
-					; the Select Required flags.
-	or al, al			; AL == 0?
-	jnz .reset_error		; return in case of failure
-
-	mov al, 0			; recalibrate drive no. 0
-	call floppy_motor_on		; switch motor on
-	call floppy_recalibrate		; issue a recalibrate command
-	or al, al			; is AL 0?
-	jnz .recalibrate_error		; return in case of failure
-
 	xor eax, eax			; success return code
 	jmp .end			; otherwise return with success
 
-.recalibrate_error:
-.reset_error:
 .lock_error:
-.configure_error:
 .unsupported_controller:
 .not_idle:
 .invalid_drive:
@@ -220,6 +194,16 @@ floppy_get_reset_count:
 global floppy_get_error_count
 floppy_get_error_count:
 	mov eax, [floppy_error_count]
+	ret
+
+; Function:   floppy_get_retry_count
+; Purpose:    to retrieve the retry counter in a fully processor state preserving
+;             way (except EFLAGS).
+; Parameters: none
+; Returns:    EAX [OUT] = retry count
+global floppy_get_retry_count
+floppy_get_retry_count:
+	mov eax, [floppy_retry_count]
 	ret
 
 ; Function:   floppy_read_data
@@ -312,11 +296,9 @@ floppy_cmd_version:
 	jmp .begin		; jump to begin of command phase
 
 .reset:
-	call floppy_reset_reconfigure  ; A fatal error occured, reset the controller.
+	call floppy_reset	; A fatal error occured, reset the controller.
 	                        ; (even if there are no more retries, to put the
 				; controller in a clean state on exit)
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
 
 	dec bl			; decrement timeout
 	jz .error		; return with failure if already tried 3 times
@@ -352,11 +334,6 @@ floppy_cmd_version:
 ;                     fifo enabled,
 ;                     drive polling disabled
 ;                     and threshold 8.
-;             IMPORTANT: the configurationcould be lost after calling this
-;             function (if a reset is performed). Usually, this is no problem,
-;             because apart from initialization (where no configuration was
-;             specified yet) this function should not be called manually,
-;             floppy_reset_reconfigure will keep respect of this automatically.
 ;             The command is fully state preserving (except EFLAGS).
 ; Parameters: none
 ; Result:     0 in AL if command succeeded,
@@ -370,12 +347,6 @@ floppy_cmd_configure:
 
 .reset:
 	call floppy_reset	; fatal error, reset controller
-				; Use normal reset here as this is the configure
-				; command and it will reconfigure the controller
-				; in the next retry or it won't work generally.
-				; Also, this prevents recursion loops.
-				; However, this means the selected drive could
-				; be lost after this command.
 
 	dec bl			; decrement timeout
 	jz .error		; return with failure if timeout exceeded
@@ -435,14 +406,16 @@ floppy_cmd_lock:
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; fatal error, reset controller
-	or al, al		; id AL 0?
-	jnz .error		; if not, return with error
+	call floppy_reset	; fatal error, reset controller
 
 	dec bl			; decrement timeout
 	jz .error		; return with failure if timeout exceeded
 
 .begin:
+	call floppy_depend_configure  ; a configure command is required to lock
+				      ; its configuration
+	jc .error		; return with error in case of failure
+
 	mov al, 20		; Lock command has id 20
 	or al, bh		; or with MT flag (lock bit)
 
@@ -488,18 +461,21 @@ floppy_cmd_recalibrate:
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; fatal error, reset controller
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	call floppy_disable_interrupt  ; reset generates at least one interrupt
+	call floppy_reset	; fatal error, reset controller
 
 	dec bl			; decrement timeout
 	jz .error		; return with failure if timeout exceeded
 
-	call floppy_reselect_drive  ; reselect drive after reset
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
-
 .begin:
+	call floppy_depend_configure  ; drive polling must be disabled
+	jc .error		; return with error in case of failure
+
+	call floppy_depend_select  ; selected drive important
+	jc .error		; return with error in case of failure
+
+	call floppy_enable_interrupt
+
 	mov al, 7		; Recalibrate command has id 7
 	call floppy_cmd_begin	; talk to the controller
 	jc .reset		; reset controller in case of failure
@@ -534,18 +510,21 @@ floppy_cmd_recalibrate:
 floppy_cmd_sense_interrupt:
 	push ecx  ; save registers
 
+	call floppy_disable_interrupt  ; disable interrupt
+
 	mov bl, 3		; overall timeout
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; fatal error, reset controller
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	call floppy_reset	; fatal error, reset controller
 
 	dec bl			; decrement timeout
 	jz .error		; if timeout exceeded, return with failure
 
 .begin:
+	call floppy_depend_configure  ; drive polling must be turned off
+	jc .error		; return with error in case of failure
+
 	mov al, 8		; Sense Interrupt command has id 8
 	call floppy_cmd_begin	; talk to the controller
 	jc .reset		; reset controller in case of failure
@@ -619,9 +598,7 @@ floppy_cmd_specify:
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; reset controller
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	call floppy_reset	; reset controller
 
 	dec bl			; decrement counter
 	jz .error		; return if this was the 3rd retry
@@ -683,19 +660,19 @@ floppy_cmd_dumpreg:
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; reset controller
-	or al, al		; is AL 0?
-	jnz .done		; if not, return with error (AL is 1)
+	call floppy_reset	; reset controller
 
-	mov al, 1		; preload al with error return code
 	dec bl			; decrement counter
-	jz .done		; return with error if this would be the 3rd retry
+	jz .error		; return with error if this would be the 3rd retry
 
 	pop edi			; restore edi as it might have been altered
 				; during reading result bytes
 	push edi
 
 .begin:
+	call floppy_depend_configure  ; drive polling
+	jc .error		; return with error in case of failure
+
 	mov al, 14		; Dumpreg has id 14
 	call floppy_cmd_begin	; talk to controller
 	jc .reset		; reset controller in case of failure
@@ -722,6 +699,10 @@ floppy_cmd_dumpreg:
 	pop ebx
 	ret
 
+.error:
+	mov al, 1		; error return code
+	jmp .done
+
 
 ; Function:   floppy_cmd_seek
 ; Purpose:    to issue a seek command to the controller in a fully processor
@@ -742,18 +723,18 @@ floppy_cmd_seek:
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; reset the controller
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	call floppy_disable_interrupt  ; reset will generate at least one interrupt
+	call floppy_reset	; reset the controller
 
 	dec bl			; decrement retry counter
 	jz .error		; return with error if maximum retry count reached
 
-	call floppy_reselect_drive  ; reselect drive after reset
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
-
 .begin:
+	call floppy_depend_drive  ; drive must be recalibrated
+	jc .error		; return with error in case of failure
+
+	call floppy_enable_interrupt  ; enable interrupt
+
 	mov al, 15		; seek command has id 15
 	call floppy_cmd_begin	; talk to controller
 	jc .reset		; reset controller in case of error
@@ -808,18 +789,15 @@ floppy_cmd_read_begin:
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; reset controller
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	call floppy_reset	; reset controller
 
 	dec bl			; decrement retry counter
 	jz .error		; return with error if maximum retry count reached
 
-	call floppy_reselect_drive  ; reselect drive after reset
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
-
 .begin:
+	call floppy_depend_drive  ; drive must be recalibrated
+	jc .error		; return with error in case of failure
+
 	mov al, [edx+4]		; MT flag
 	or al, al		; is MT enabled?
 	jz .MT_disabled		; if not, go straight to command id and MFM
@@ -896,6 +874,7 @@ floppy_cmd_read_data:
 	push edx  ; save registers
 
 	xor ecx, ecx		; zero byte counter
+	cld			; clear direction flag
 
 .loop:
 	mov dx, MSR		; DX = MSR
@@ -1001,21 +980,17 @@ floppy_recalibrate:
 	jmp .recalibration
 
 .reset:
-	call floppy_reset_reconfigure  ; reset controller
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	call floppy_disable_interrupt  ; disable possibly enabled interrupt
+	call floppy_reset	; reset controller
 
 .retry:
 	dec bh			; decrease counter
 	jz .error		; return with failure if this is the 3rd retry
 
-	call floppy_reselect_drive  ; reselect drive after possible reset
-	or al, al		; is AL 0?
-	jnz .error
+	inc dword [floppy_retry_count]  ; increment retry counter
 
 .recalibration:
 	call floppy_wait_IRQ6_start   ; wait for interrupt
-	call floppy_enable_interrupt  ; enable interrupts
 
 	mov al, ch		; drive number
 	call floppy_cmd_recalibrate  ; issue Recalibrate command
@@ -1024,8 +999,6 @@ floppy_recalibrate:
 
 	mov eax, 4001                  ; timeout: >~4s
 	call floppy_wait_IRQ6_end      ; wait for interrupt
-	call floppy_disable_interrupt  ; disable interrupts
-
 	or eax, eax		; is EAX 0?
 	jnz .reset		; reset controller in case of timeout
 
@@ -1110,6 +1083,8 @@ floppy_select_drive:
 	jz .end				; return with failure if this was the 3rd
 					; retry
 
+	inc dword [floppy_retry_count]  ; increment retry counter
+
 .begin:
 	movzx ebx, byte [floppy_type]	; drive type
 	mov al, [.params_srt+ebx-1]	; SRT
@@ -1176,20 +1151,6 @@ floppy_select_drive:
 	db  0  ; 2.88 MB 3.5"
 
 
-; Function:   floppy_reselect_drive
-; Purpose:    to reselect a drive after a reset in a fully state preserving way
-;             (except EFLAGS). If not called after previous reset (that is,
-;             Select Required flag is not set) it will do nothing, because the
-;             drive will be selected already.
-; Parameters: none
-; Returns:    0 in Al on success,
-;             1 in AL on error
-floppy_reselect_drive:
-	mov al, [floppy_selected_drive]
-	call floppy_select_drive
-	ret
-
-
 ; Function:   floppy_seek
 ; Purpose:    to perform a complete seek operation (with Sense interrupt) in a
 ;             fully processor state preserving way (except EFLAGS).
@@ -1217,22 +1178,17 @@ floppy_seek:
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; reset controller
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	call floppy_disable_interrupt  ; disable possibly enabled interrupt
+	call floppy_reset	; reset controller
 
 .retry:
 	dec bh			; decrement retry counter
 	jz .error		; return with error if maximum retry count reached
 
-	call floppy_reselect_drive  ; reselect drive after possible reset (will
-				    ; do nothing if no reset performed)
-	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	inc dword [floppy_retry_count]  ; increment retry counter
 
 .begin:
 	call floppy_wait_IRQ6_start   ; wait for interrupt
-	call floppy_enable_interrupt  ; enable interrupt
 
 	mov al, ch		; drive number
 	mov ah, [.NCN]		; NCN
@@ -1242,7 +1198,6 @@ floppy_seek:
 
 	mov eax, 4001		; wait >~4s
 	call floppy_wait_IRQ6_end      ; wait for interrupt
-	call floppy_disable_interrupt  ; disable interrupt
 	or eax, eax		; is EAX 0?
 	jnz .reset		; reset controller in case of timeout
 
@@ -1300,8 +1255,6 @@ floppy_read:
 	push edi
 	push eax
 
-	mov byte [.tmp], 2
-
 	cmp al, 3		; drive number <=3?
 	ja .error		; if not, return with error
 
@@ -1320,27 +1273,17 @@ floppy_read:
 	jmp .begin
 
 .reset:
-	call floppy_reset_reconfigure  ; reset controller
-	or al, al		; is AL 0?
-	jnz .error		; if no, return with error
+	call floppy_reset	; reset controller
 
 .retry:
 	dec bl			; decrement retry counter
 	jz .error		; return with error if maximum retry count reached
 
-	call floppy_recalibrate_after_reset  ; reselect and recalibrate drive after possible reset
-	or al, al		 ; is AL 0?
-	jnz .error		 ; return with error in case of failure
-
 	mov edi, [.previous_edi]  ; restore EDI
 
-.begin:
-	DBGSTR 'LBA: '
-	DBGHEX [.LBA]
-	DBGSTR 'h, cnt: '
-	DBGHEX [.cnt]
-	DBGSTR 'h', 0x0D, 0x0A
+	inc dword [floppy_retry_count]  ; increment retry counter
 
+.begin:
 	mov [.previous_edi], edi  ; save EDI for retry
 
 	mov eax, [.LBA]		; LBA address
@@ -1402,11 +1345,6 @@ floppy_read:
 	cmp eax, ecx		; was the correct amount of data transfered?
 	jne .retry		; if not, retry the command
 				; ECX can be modified again
-
-	DEBUG 'a'
-	dec byte [.tmp]
-	jz .reset
-	DEBUG 'b'
 
 	mov eax, [.to_transfer]  ; number of sectors read
 	sub [.cnt], eax		 ; subtract from total sector count
@@ -1485,7 +1423,6 @@ floppy_read:
 .cnt dd 0
 .to_transfer dd 0
 .previous_edi dd 0
-.tmp db 0
 
 .read_params times 5 db 0  ; C, H, R, count of blocks, MT
 .read_result times 7 db 0  ; ST0, ST1, ST2, C, H, R, N
@@ -1527,10 +1464,8 @@ floppy_reset:
 	; drive polling mode disabled, not required to send 4 Sense Interrupt commands
 	; FIFOs locked, no need for new Configure command
 
-	or word [floppy_status],
-		1 << FD_RECAL_REQUIRED |
-		1 << FD_RECONF_REQUIRED |
-		3h     ; set RECAL, RECONF, SLR, SPR
+	or word [floppy_status], FD_RECAL_REQUIRED | FD_RECONF_REQUIRED | 3h
+				; set RECAL, RECONF, SLR, SPR
 
 	inc dword [floppy_reset_count]  ; increase reset count
 
@@ -1540,27 +1475,109 @@ floppy_reset:
 	pop eax
 	ret
 
-; Function:   floppy_reset_reconfigure
-; Purpose:    to perform a controller reset with reconfiguration afterwards.
-;             A controller reset clears EIS and POLL bits. This function makes
-;             sure that the controller is in the same state after the reset
-;             as it was before. Normally, this function should always be used.
-;             As all command layer functions used by this function leave the
-;             controller in a clean state on error (after performing a reset
-;             without, this Function leaves the controller in a clean state on
-;             error, too.
-;             The processor's state is not modified (except EFLAGS).
+
+; Function:   floppy_depend_configure
+; Purpose:    to configure the controller if required. This function shall be
+;             called before every procedure that requires the controller to be
+;             configured (but be aware to avoid recursion loops).
+;             The processor state is not modified (except EFLAGS).
 ; Parameters: none
-; Returns:    1 in AL in case of failure, 0 in case of success
-floppy_reset_reconfigure:
-	call floppy_reset		; reset controller
+; Returns:    CF set on error, cleared otherwise
+floppy_depend_configure:
+	push eax  ; save registers
 
-	call floppy_cmd_configure	; issue configure commans
+	test word [floppy_status], FD_RECONF_REQUIRED  ; has the controller been
+							; configured yet?
+	jz .success			; if yes, we're done
+
+	call floppy_cmd_configure	; issue configure command
 	or al, al			; is AL 0?
-	jnz .end			; if not, return with error (AL is 1)
+	jnz .error			; if not, return with failure
 
+.success:
+	and word [floppy_status], ~FD_RECONF_REQUIRED  ; remove flag
+	clc				; success return code
 .end:
+	pop eax  ; restore registers
 	ret
+
+.error:
+	stc				; error return code
+	jmp .end
+
+; Function:   floppy_depend_select
+; Purpose:    to select a specific drive if it is required. This function shall be
+;             called before every procedure that requires a specific drive to be
+;             selected (the drive must have been selected with floppy_select_drive
+;             once). The main purpose of this function is to be used in cases,
+;             where floppy_depend_drive would geenrate recursion loops.
+;             The processos state is not modified (except EFLAGS).
+; Parameters: none
+; Retuns:     CF set on error, cleared otherwise
+floppy_depend_select:
+	push eax  ; save registers
+
+	mov al, [floppy_selected_drive]
+	call floppy_select_drive	; A selection is only done if SLR is set.
+	or al, al			; is AL 0?
+	jnz .error			; if not, return with failure
+
+.success:
+	clc				; success return code
+.end:
+	pop eax  ; restore registers
+	ret
+
+.error:
+	stc				; error return code
+	jmp .end
+
+
+; Function:   floppy_depend_drive
+; Purpose:    to recalibrate the drives and reselect the selected drive if
+;             required. This function shall be called before every procedure that
+;             accesses a specific drive (but aware of recursion loops). The
+;             reason why those to tasks are taken together is that recalibration
+;             changes the selected drive and therefore clears SLR and SPR.
+;             The processor state is not modified (except EFLAGS).
+; Parameters: none
+; Returns:    CF set on error, cleared otherwise
+floppy_depend_drive:
+	push eax  ; save registers
+	push ebx
+	push ecx
+
+	mov bl, [floppy_selected_drive]	; save previously selected drive
+
+	test word [floppy_status], FD_RECAL_REQUIRED  ; have the drives been
+						      ; recalibrated yet?
+	jz .recalibrate_end		; if yes, we're done
+
+	mov al, 0			; at the moment only drive 0 is supported
+	call floppy_recalibrate		; perform recalibration
+	or al, al			; is AL 0?
+	jnz .error			; return with error in case of error
+
+
+.recalibrate_end:
+	and word [floppy_status], ~FD_RECAL_REQUIRED  ; remove flag
+
+	mov al, bl			; get previously selected drive
+	call floppy_select_drive	; select the drive (if it isn't already selected)
+	or al, al			; is AL 0?
+	jnz .error			; if not, return with error
+
+.success:
+	clc				; success return code
+.end:
+	pop ecx  ; restore registers
+	pop ebx
+	pop eax
+	ret
+
+.error:
+	stc				; error return code
+	jmp .end
 
 
 ; Function:   floppy_motor_on
@@ -1710,10 +1727,10 @@ floppy_IRQ6_handler:
 	push eax  ; save registers
 	push esi
 
-	test word [floppy_status], FD_WAIT_INTERRUPT
+	cmp byte [floppy_interrupt_count], 0
 	jz .not_expected	; this is an unexpected interrupt
 
-	and word [floppy_status], ~FD_WAIT_INTERRUPT  ; remove wait state
+	dec byte [floppy_interrupt_count]  ; decrement wait count
 
 .end:
 	mov al, 20h
@@ -1738,9 +1755,9 @@ floppy_IRQ6_handler:
 ;             way (except EFLAGS).
 ;             The timeout is not exactly the specified value X, it is between
 ;             X - 1 ms and X ms. This is due to the nature of the sleep function.
-; Parameters: EAX [IN] = timeout in 1/100 seconds or INFINITE
+;             This function will enable interrupts.
+; Parameters: EAX [IN] = timeout in milliseconds or INFINITE
 ; Returns:    EAX is set to 1 in case of timeout, 0 otherwise.
-INFINITE equ -1  ; biggest 32 bit integer
 floppy_wait_IRQ6:
 	call floppy_wait_IRQ6_start
 	call floppy_wait_IRQ6_end
@@ -1749,11 +1766,12 @@ floppy_wait_IRQ6:
 ; Function:   floppy_wait_IRQ6_start
 ; Purpose:    to start waiting for an IRQ 6 if it is likely that the interrupt
 ;             will occure before floppy_wait_IRQ6_end is called. MUST be followed
-;             by a call to floppy_wait_IRQ6_end.
+;             by a call to floppy_wait_IRQ6_end or floppy_eait_IRQ6_cancel.
 ;             The function is fully processor state preserving (except EFLAGS).
 ; Parameters: none
 floppy_wait_IRQ6_start:
-	or dword [floppy_status], FD_WAIT_INTERRUPT
+	inc byte [floppy_interrupt_count]
+	inc byte [floppy_interrupt_nesting_level]
 	ret
 
 ; Function:   floppy_wait_IRQ6_end
@@ -1761,9 +1779,11 @@ floppy_wait_IRQ6_start:
 ;             was called.
 ;             The timeout is not exactly the specified value X, it is between
 ;             X - 1 ms and X ms. This is due to the nature of the sleep function.
+;             This function will enable interrupts.
 ;             the funciton is fully processor state preserving (except EFLAGS).
 ; Parameters: EAX [IN] = timeout in milliseconds or INFINITE
 ; Returns:    EAX is set to 1 in case of timeout, 0 otherwise.
+INFINITE equ -1  ; biggest 32 bit integer
 floppy_wait_IRQ6_end:
 	cmp eax, INFINITE	; is EAX == INFINITE?
 	je .wait_infinite
@@ -1771,35 +1791,47 @@ floppy_wait_IRQ6_end:
 	push ebx  ; save registers
 
 	mov ebx, eax		; EAX needed for parameters
-	mov eax, 1		; wait 1 ms, waiting will get in sync first
-				; waiting period
 
-.loop:
-	test word [floppy_status], FD_WAIT_INTERRUPT  ; did an interrupt already occur?
-	jz .finished		; if yes, waiting finished
+.loop_timeout:
+	cli			; no interrupt shall happen between here and the
+				; timeout interrupt count decrementer (could get < 0 then)
+	mov al, [floppy_interrupt_count]
+	cmp al, [floppy_interrupt_nesting_level]
+	jb .finished
 
 	or ebx, ebx		; is EBX 0?
 	jz .timeout		; if yes, timeout
+	sti
 
+	mov eax, 1		; 1 ms
 	call sleep		; otherwise, wait
 
 	dec ebx			; decrement timeout
-	jmp .loop
+	jmp .loop_timeout
 
 .timeout:
+	dec byte [floppy_interrupt_count]  ; decrement wait count
+
 	mov eax, 1		; return with timeout
 	jmp .end
 
 .finished:
 	xor eax, eax		; timeout didn't exceed
 .end:
+	sti			; enable interrupts after decrementing done
+
+	dec byte [floppy_interrupt_nesting_level]
 	pop ebx  ; restore registers
 	ret
 
 .wait_infinite:
-	test word [floppy_status], FD_WAIT_INTERRUPT  ; test if flag still set
-	jnz .wait_infinite	; if yes, wait longer
+	mov al, [floppy_interrupt_nesting_level]
 
+.loop_infinite:
+	cmp [floppy_interrupt_count], al  ; interrupt count >= nesting level?
+	jae .loop_infinite	; if yes, wait longer
+
+	dec byte [floppy_interrupt_nesting_level]
 	xor eax, eax		; no timeout exceeded, because timeout is infinite
 	ret
 
@@ -1808,7 +1840,17 @@ floppy_wait_IRQ6_end:
 ;             The processor state is fully preserved (except EFLAGS).
 ; Parameters: none
 floppy_wait_IRQ6_cancel:
-	and word [floppy_status], ~FD_WAIT_INTERRUPT
+	dec byte [floppy_interrupt_nesting_level]
+
+	cli			; the IRQ 6 handler must not decrement a negative
+				; interrupt count
+	sub byte [floppy_interrupt_count], 1
+	jnc .no_carry
+
+	inc byte [floppy_interrupt_count]  ; could be negative if an interrupt
+					   ; occured before IRQ6_cancel.
+.no_carry:
+	sti
 	ret
 
 ; =========================
@@ -2151,10 +2193,11 @@ floppy_debug_update:
 
 	call .do_line0
 	call .do_line1
+	call .do_line2
+	call .do_line3
+	call .do_line4
+	lea edi, [ebx+5*80*2]
 	call .do_dumpreg  ; occupies 3 lines
-	call .do_line5
-	call .do_line6
-	call .do_line7
 	call .do_line9
 
 .end:
@@ -2178,18 +2221,19 @@ floppy_debug_update:
 	call .do_errors
 	ret
 
-.do_line5:
-	lea edi, [ebx+5*80*2]  ; line 5
+.do_line2:
+	lea edi, [ebx+2*80*2]  ; line 2
 	call .do_ST0
+	call .do_retries
 	ret
 
-.do_line6:
-	lea edi, [ebx+6*80*2]  ; line 6
+.do_line3:
+	lea edi, [ebx+3*80*2]  ; line 3
 	call .do_ST1
 	ret
 
-.do_line7:
-	lea edi, [ebx+7*80*2]  ; line 7
+.do_line4:
+	lea edi, [ebx+4*80*2]  ; line 4
 	call .do_ST2
 	ret
 
@@ -2250,6 +2294,14 @@ floppy_debug_update:
 
 	mov eax, [floppy_error_count]	; read error count
 	call floppy_debug_dword		; print error count
+	ret
+
+.do_retries:
+	mov esi, .msg_retries		; retries message
+	call floppy_debug_string
+
+	mov eax, [floppy_retry_count]	; read retry count
+	call floppy_debug_dword		; print retry count
 	ret
 
 ; occupies 3 lines
@@ -2366,15 +2418,27 @@ floppy_debug_update:
 	mov esi, .msg_driver_status	; print message
 	call floppy_debug_string
 
-	mov esi, .msg_INT		; RECAL, RECONF, INT, COE, SLR, SPR
-	mov dx, 0020h			; bitmask
-	mov cx, 6			; 6 flags
+	mov esi, .msg_RECAL		; RECAL, RECONF, COE, SLR, SPR
+	mov dx, 0010h			; bitmask
+	mov cx, 5			; 5 flags
 
 .loop_driver_status:
 	test [floppy_status], dx
 	call floppy_debug_case_string	; print flag
 	shr dx, 1			; shift bitmask
 	loop .loop_driver_status, cx
+
+	mov esi, .msg_INTNEST		; interrupt nesting level message
+	call floppy_debug_string
+
+	mov al, [floppy_interrupt_nesting_level]
+	call floppy_debug_byte		; print interrupt nesting level
+
+	mov esi, .msg_INTCNT		; interrupt count message
+	call floppy_debug_string
+
+	mov al, [floppy_interrupt_count]
+	call floppy_debug_byte		; print interrupt count
 	ret
 
 .do_ST0:
@@ -2445,6 +2509,8 @@ floppy_debug_update:
 		     db 'resets: ', 0
 .msg_errors times 18 db ' '
 		     db 'errors: ', 0
+.msg_retries times 17 db ' '
+		     db 'retries: ', 0
 
 .msg_dumpreg_error db 'Dumpreg command failed', 0
 .msg_dumpreg_disabled db 'Dumpreg disabled', 0
@@ -2475,10 +2541,11 @@ floppy_debug_update:
 .msg_driver_status db 'driver status: ', 0
 .msg_RECAL db 'recal ', 0
 .msg_RECONF db 'reconf ', 0
-.msg_INT db 'int ', 0
 .msg_COE db 'coe ', 0
 .msg_SLR db 'slr ', 0
-.msg_spr db 'spr', 0
+.msg_SPR db 'spr ', 0
+.msg_INTNEST db 'IntNest: ', 0
+.msg_INTCNT db ' IntCnt: ', 0
 
 .msg_ST0 db 'ST0: ', 0, ' IC1 ', 0, ' IC0 ', 0, ' SE  ', 0, ' EC  ', 0, '  -  ', 0
          db '  H  ', 0, ' DS1 ', 0, ' DS0', 0
@@ -2707,15 +2774,17 @@ floppy_debug_ST2 db 0  ; debug variable for ST2
 
 ; ---------------------------------------------------
 ; status word:
-FD_RECAL_REQUIRED equ 20h  ;   :  the drives have not been recalibrated yet
-FD_RECONF_REQUIRED equ 10h ;   :  the controller has not been configured yet (e.g. after reset)
-FD_WAIT_INTERRUPT equ 8 ; (INT):  this flag is used to wait for an IRQ 6
+FD_RECAL_REQUIRED equ 10h  ;   :  the drives have not been recalibrated yet
+FD_RECONF_REQUIRED equ 08h ;   :  the controller has not been configured yet (e.g. after reset)
 ;     4h: Cut Off Enabled (COE):  if 0, the motor timers will be halted until it is set to 1
 ;     2h: Select Required (SLR):  the selected drive is invalid (e.g. after reset, initialization)
 ;     1h: Specify Required (SPR): the next select procedure must send a Specify command
 floppy_status dw 0
 floppy_reset_count dd 0		; count of performed controller resets
+floppy_error_count dd 0		; error counter
+floppy_retry_count dd 0		; retry counter
 floppy_type db 0		; type of master floppy
 floppy_motors times 4 dw 2000	; motor cut off timers for drives
-floppy_error_count dd 0		; error counter
 floppy_selected_drive db 0	; the currently selected drive
+floppy_interrupt_nesting_level db 0  ; count of concurrent IRQ 6 listeners
+floppy_interrupt_count db 0	; count of occured IRQ 6

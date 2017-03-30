@@ -7,5 +7,10 @@ OUTPUT_ARCH(i386)      /* Is this a good idea? What about emulation? */
 SECTIONS
 {
 	. = 0x7C00;
-	.text : { *(.text) }
+
+    LOADER : { *(LOADER) }
+
+    . = 0x1000000;  /* Kernel will be loaded at address 0x1000000 */
+
+	.text : AT ( ADDR (LOADER) + SIZEOF (LOADER) ) { *(.text) }
 }

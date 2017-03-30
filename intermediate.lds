@@ -1,5 +1,4 @@
-/* Linker script for linking of individual modules to one relocatable module
-   where the output module is aligned to full blocks of 200h bytes. */
+/* Linker script for linking of individual modules to one relocatable module */
 
 OUTPUT_FORMAT(elf32-i386)
 OUTPUT_ARCH(i386)      /* Is this a good idea? What about emulation? */
@@ -7,6 +6,11 @@ OUTPUT_ARCH(i386)      /* Is this a good idea? What about emulation? */
 SECTIONS
 {
 	. = 0;
+
+	LOADER : {
+		*(LOADER)
+	}
+	
 	.text : {
 		*(.text)
 	}

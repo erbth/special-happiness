@@ -7,6 +7,12 @@ OUTPUT_ARCH(i386)      /* Is this a good idea? What about emulation? */
 SECTIONS
 {
 	. = 0;
+
+    LOADER : {
+        *(LOADER)
+        . = ALIGN(0x200);  /* align to full block */
+    }
+
 	.text : {
 		*(.text)
 		. = ALIGN(0x200);  /* align to full block */
