@@ -36,6 +36,25 @@ bits 32
 	pop eax
 %endmacro
 
+
+%macro DBGSTR 1+
+	push esi
+	jmp %%code
+
+%%string db %1, 0
+%%code:
+	mov esi, %%string
+	call p_print_string
+	pop esi
+%endmacro
+
+%macro DBGHEX 1
+	push eax
+	mov eax, %1
+	call p_print_hex
+	pop eax
+%endmacro
+
 ; external symbols
 extern p_print_hex, p_print_string, p_putchar
 extern sleep
@@ -111,13 +130,14 @@ floppy_init:
 	or al, al			; AL == 0?
 	jnz .lock_error			; return in case of failure
 
-	call floppy_reset_reconfigure	; perform a contoller reset
+	call floppy_reset	; perform a contoller reset
 	                                ; this will set the Specify Required and
 					; the Select Required flags.
 	or al, al			; AL == 0?
 	jnz .reset_error		; return in case of failure
 
 	mov al, 0			; recalibrate drive no. 0
+	call floppy_motor_on		; switch motor on
 	call floppy_recalibrate		; issue a recalibrate command
 	or al, al			; is AL 0?
 	jnz .recalibrate_error		; return in case of failure
@@ -138,11 +158,11 @@ floppy_init:
 	inc eax       ; EAX := 1
 
 .end:
-	mov edx, eax			; save eax
-	xor eax, eax			; drive 0
+	mov dl, al			; save AL
+	xor al, al			; drive 0
 	call floppy_motor_off		; shut off motor
-	mov eax, edx			; restore eax
-	
+	mov al, dl			; restore AL
+
 	pop edx  ; restore registers
 	ret
 
@@ -201,6 +221,43 @@ global floppy_get_error_count
 floppy_get_error_count:
 	mov eax, [floppy_error_count]
 	ret
+
+; Function:   floppy_read_data
+; Purpose:    to read data from a floppy drive after initialization in a fully
+;             self contained, processor state preserving way (except EFLAGS).
+;             If the drive number is invalid, an error is returned.
+; Parameters:  AL [IN] = drive number
+;             EBX [IN] = LBA of data to read
+;             ECX [IN] = sector count (sector size is 512 bytes]
+;             ES:EDI [IN] = data destination in memory
+; Returns:    0 in EAX in case of success, 1 in case of failure
+global floppy_read_data
+floppy_read_data:
+	push edx  ; save registers
+
+	cmp al, 3		; drive number <=3?
+	ja .error		; if not, return with error
+
+	mov dl, al		; save drive number
+
+	call floppy_motor_on	; switch on drive motor
+
+	call floppy_read	; read data
+
+	xchg dl, al		; restore drive number and save return value
+	call floppy_motor_off	; switch of drive motor
+
+	mov al, dl		; restore return value
+
+.end:
+	movzx eax, al		; expand return value to whole EAX
+
+	pop edx  ; restore registers
+	ret
+
+.error:
+	mov al, 1		; error return code
+	jmp .end
 
 ; Function:   floppy_timer
 ; Purpose:    to perform tasks on a regular time base (only motor cut off timer
@@ -666,17 +723,265 @@ floppy_cmd_dumpreg:
 	ret
 
 
+; Function:   floppy_cmd_seek
+; Purpose:    to issue a seek command to the controller in a fully processor
+;             state preserving way (except EFLAGS). If the specified drive
+;             number is invalid, an error is returned.
+; Parameters: AL [IN] = drive number
+;             AH [IN] = NCN
+; Returns:    0 in AL in case of succes, 1 in AL in case of failure
+floppy_cmd_seek:
+	push ebx  ; save registers
+	push ecx
+
+	cmp al, 3		; is the drive number in AL <= 3?
+	ja .error		; if yes, return with error
+	mov ch, al		; otherwise, save drive number
+
+	mov bl, 2+1		; two retries in case of communication error
+	jmp .begin
+
+.reset:
+	call floppy_reset_reconfigure  ; reset the controller
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+	dec bl			; decrement retry counter
+	jz .error		; return with error if maximum retry count reached
+
+	call floppy_reselect_drive  ; reselect drive after reset
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+.begin:
+	mov al, 15		; seek command has id 15
+	call floppy_cmd_begin	; talk to controller
+	jc .reset		; reset controller in case of error
+
+	mov al, ch		; restore drive number, HDS is 0
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of error
+
+	mov al, ah		; NCN
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of error
+
+	call floppy_cmd_end	; wait for controller
+	jc .reset		; reset controller in case of error
+
+	xor al, al		; success return code
+
+.done:
+	pop ecx  ; restore registers
+	pop ebx
+	ret
+
+.error:
+	mov al, 1		; error return code
+	jmp .done
+
+
+; Function:   floppy_cmd_read_begin
+; Purpose:    to begin a read command in a fully processor state preserving way
+;             (except EFLAGS). Also, the 5 byte parameter buffer is not modified.
+;             If the specified drive number is invalid, an error is returned.
+; Parameters:  AL [IN] = drive number
+;             EDX [IN] = the address of a 5 byte buffer of the following layout:
+;                           0x0: C
+;                           0x1: H
+;                           0x2: R (start sector)
+;                           0x3: EOT
+;                           0x4: if 0, MT is disabled, otherwise MT is enabled
+; Returns:     AL [OUT] = 0 in case of success, 1 otherwise
+;             the buffer pointed to by ECX is filled accordingly
+; see:        http://wiki.osdev.org/FDC#Read.2FWrite
+floppy_cmd_read_begin:
+	push ebx  ; save registers
+	push ecx
+
+	cmp al, 3		; is the drive number <=3?
+	ja .error		; otherwise, return with error
+
+	mov ch, al		; save drive number
+
+	mov bl, 2+1		; two retries in case of communication error
+	jmp .begin
+
+.reset:
+	call floppy_reset_reconfigure  ; reset controller
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+	dec bl			; decrement retry counter
+	jz .error		; return with error if maximum retry count reached
+
+	call floppy_reselect_drive  ; reselect drive after reset
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+.begin:
+	mov al, [edx+4]		; MT flag
+	or al, al		; is MT enabled?
+	jz .MT_disabled		; if not, go straight to command id and MFM
+				; (AL is 0, doesn't have to be cleared)
+
+	mov al, 80h		; otherwise, MT is enabled (here AL would have to
+				; be cleared, but a MOV command is used)
+
+.MT_disabled:
+	or al, 6 | 40h		; Read Data command has id 6, MFM enabled
+	call floppy_cmd_begin	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	mov al, [edx+1]		; head number
+	shl al, 2		; shift to left (HDS bit at position 2)
+	or al, ch		; AL = HDS << 2 | DS1 DS0
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	mov al, [edx]		; C
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	mov al, [edx+1]		; H
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	mov al, [edx+2]		; R
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	mov al, 2		; N (512 bytes per sector)
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	mov al, [edx+3]		; EOT: according to
+				; http://wiki.osdev.org/FDC#Read.2FWritesector
+				; this is the sector count to transfer
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	mov al, 1BH		; gap 3 size, default value
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	mov al, 0FFh		; DTL, unused due to N != 0
+	call floppy_cmd_param	; talk to controller
+	jc .reset		; reset controller in case of failure
+
+	call floppy_cmd_wait_busy  ; wait for controller
+	jc .reset		; reset controller in case of failure
+
+	xor al, al		; success return code
+
+.done:
+	pop ecx
+	pop ebx
+	ret
+
+.error:
+	mov al, 1		; error return code
+	jmp .done
+
+
+; Function:   floppy_cmd_read_data
+; Purpose:    to perform the data transfer using PIO mode during a Read command.
+;             EDI is updated to the new position in the destinatio buffer
+;             (and EFLAGS is modified).
+; Parameters: ES:EDI [IN] = destination buffer
+; Returns:     AL [OUT] = 0 on success, 1 on error
+;             ECX [OUT] = count of transfered bytes
+; TODO:       timeout
+floppy_cmd_read_data:
+	push edx  ; save registers
+
+	xor ecx, ecx		; zero byte counter
+
+.loop:
+	mov dx, MSR		; DX = MSR
+	in al, dx
+
+	test al, 80h		; RQM 1?
+	jz .loop		; if not, wait
+
+	test al, 20h		; is the NON-DMA flag set?
+	jz .transfer_finished	; if not, the transfer finished
+
+	test al, 40h		; DIO must be set
+	jz .error		; if not, return with error
+
+	mov dx, FIFO		; otherwise, read data
+	in al, dx		; read from FIFO port
+	stosb			; store byte
+	inc ecx			; increase byte counter
+	jmp .loop		; loop
+
+.transfer_finished:
+	xor al, al		; success return code
+
+.end:
+	pop edx  ; restore registers
+	ret
+
+.error:
+	mov al, 1		; error return code
+	jmp .end
+
+
+; Function:   floppy_cmd_read_end
+; Purpose:    to read the result bytes during a read command and to terminate
+;             the command. The processor state is fully preserved (except EFLAGS).
+; Parameters: EDX [IN] = the address of a 7 byte buffer that will be filled with
+;                        the command's result values. It is of the following layout:
+;                           0x0: ST0
+;                           0x1: ST1
+;                           0x2: ST2
+;                           0x3: C
+;                           0x4: H
+;                           0x5: R
+;                           0x6: N
+; Returns:    0 in AL on success, 1 on error
+floppy_cmd_read_end:
+	push ebx  ; save registers
+	push ecx
+
+	xor ebx, ebx		; loop index
+
+.loop:
+	call floppy_cmd_result	; talk to controller
+	jc .error		; return in case of error
+	mov [edx+ebx], al	; store result byte
+
+	inc ebx			; increase index
+	cmp bl, 7		; 7 result bytes
+	jb .loop
+
+	call floppy_cmd_end	; wait for controller
+	jc .error		; return in case of error
+
+	xor al, al		; success return code
+
+.end:
+	pop ecx  ; restore registers
+	pop ebx
+	ret
+
+.error:
+	mov al, 1		; error return code
+	jmp .end
+
+
 ; =================================
 ; functions for specific procedures
 ; =================================
 
 ; Function:   floppy_recalibrate
-; Purpose:    to perform a recalbration sequence on a drive by performing a drive
+; Purpose:    to perform a recalibration sequence on a drive by performing a drive
 ;             select procedure, issuing a Recalibrate command and issuing a
 ;             Sense Interrupt command. The recalibration will be retried twice
 ;             in case of non-command level failure. Thus, if a disk with 83
 ;             cylinders is used, the required second recalibration sequence will
-;             be performed.
+;             be performed. The specified drive's motor must be switched on.
 ;             The function is fully state preserving (except EFLAGS).
 ; Parameters: AL [IN] = drive number
 ; Returns:    0 in AL if function succeeded,
@@ -686,14 +991,11 @@ floppy_recalibrate:
 	push ecx
 	push eax
 
-	mov ch, al		; save drive number
+	mov ch, al		; save drive number first
 
 	call floppy_select_drive  ; perform a drive select procedure
 	or al, al		; is AL 0?
 	jnz .error		; if not, return with error
-
-	mov al, ch		; drive number
-	call floppy_motor_on	; switch on drive motor
 
 	mov bh, 2+1		; retry recalibration 2 times
 	jmp .recalibration
@@ -752,6 +1054,9 @@ floppy_recalibrate:
 	ret
 
 .error:
+	call floppy_disable_interrupt  ; disable possibly enabled interrupt
+	call floppy_wait_IRQ6_cancel   ; cancel possible waiting for IRQ6
+
 	mov al, 1		; error return code
 	jmp .end
 
@@ -885,6 +1190,307 @@ floppy_reselect_drive:
 	ret
 
 
+; Function:   floppy_seek
+; Purpose:    to perform a complete seek operation (with Sense interrupt) in a
+;             fully processor state preserving way (except EFLAGS).
+;             If the specified drive number is invalid, an error is returned.
+;             The specified drive's motor must be switched on.
+; Parameters: AL [IN] = drive number
+;             AH [IN] = NCN
+; Returns:    0 in AL in case of success, 1 in AL in case of error
+floppy_seek:
+	push ebx  ; save registers
+	push ecx
+	push eax
+
+	cmp al, 3		; drive number <= 3?
+	ja .error		; if not, return with error
+
+	mov ch, al		; otherwise, save drive number
+	mov [.NCN], ah		; save NCN
+
+	call floppy_select_drive  ; select drive
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+	mov bh, 2+1		; retry command 2 times in case of failure
+	jmp .begin
+
+.reset:
+	call floppy_reset_reconfigure  ; reset controller
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+.retry:
+	dec bh			; decrement retry counter
+	jz .error		; return with error if maximum retry count reached
+
+	call floppy_reselect_drive  ; reselect drive after possible reset (will
+				    ; do nothing if no reset performed)
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+.begin:
+	call floppy_wait_IRQ6_start   ; wait for interrupt
+	call floppy_enable_interrupt  ; enable interrupt
+
+	mov al, ch		; drive number
+	mov ah, [.NCN]		; NCN
+	call floppy_cmd_seek	; seek command
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+	mov eax, 4001		; wait >~4s
+	call floppy_wait_IRQ6_end      ; wait for interrupt
+	call floppy_disable_interrupt  ; disable interrupt
+	or eax, eax		; is EAX 0?
+	jnz .reset		; reset controller in case of timeout
+
+	call floppy_cmd_sense_interrupt  ; Sense Interrupt command
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+	mov al, ch		; drive number
+	or al, 20h		; AL = 20h | drive number
+	cmp al, ah		; compare with ST0
+	jne .retry		; if not equal, retry command
+
+	cmp bl, [.NCN]		; new PCN == previous NCN?
+	jne .retry		; if not, retry command
+
+	xor al, al		; success return code
+
+.end:
+	mov bl, al  ; save al
+	pop eax     ; restore eax
+	mov al, bl  ; reapply al
+
+	pop ecx  ; restore other registers
+	pop ebx
+	ret
+
+.error:
+	call floppy_disable_interrupt  ; disable possibly enabled interrupt
+	call floppy_wait_IRQ6_cancel   ; cancel possible waiting for interrupt
+
+	mov al, 1		; error return code
+	jmp .end
+
+.NCN db 0
+
+
+; Function:   floppy_read
+; Purpose:    to read data from the floppy disk. If the specified drive number
+;             is invalid, an error is returned. The read process (begin,
+;             read data, end) as a whole is retried 2 times in case of failure.
+;             It must be noted that errors on command issuing layer will lead to
+;             a retry of the whole read process if encountered during reading
+;             data or reading the result bytes. The specified drive's motor must
+;             be switched on. The processor state is not modified (except EFLAGS).
+; Parameters:  AL [IN] = drive number
+;             EBX [IN] = LBA of data to read
+;             ECX [IN] = count of blocks to read (each block has size 512 bytes)
+;             ES:EDI [IN] = destination of data in memory
+; Returns:    0 in AL on success, 1 on error
+; todo:       number of sectors read by actual C, H, R values returned from controller
+floppy_read:
+	push ebx  ; save registers
+	push ecx
+	push edx
+	push edi
+	push eax
+
+	mov byte [.tmp], 2
+
+	cmp al, 3		; drive number <=3?
+	ja .error		; if not, return with error
+
+	or ecx, ecx		; something to read?
+	jz .finished		; if not, we're done
+
+	mov [.drive_no], al	; save drive number
+	mov [.LBA], ebx		; save LBA address
+	mov [.cnt], ecx		; save block count
+
+	call floppy_select_drive  ; select drive
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+	mov bl, 2+1		; two retries in case of failure
+	jmp .begin
+
+.reset:
+	call floppy_reset_reconfigure  ; reset controller
+	or al, al		; is AL 0?
+	jnz .error		; if no, return with error
+
+.retry:
+	dec bl			; decrement retry counter
+	jz .error		; return with error if maximum retry count reached
+
+	call floppy_recalibrate_after_reset  ; reselect and recalibrate drive after possible reset
+	or al, al		 ; is AL 0?
+	jnz .error		 ; return with error in case of failure
+
+	mov edi, [.previous_edi]  ; restore EDI
+
+.begin:
+	DBGSTR 'LBA: '
+	DBGHEX [.LBA]
+	DBGSTR 'h, cnt: '
+	DBGHEX [.cnt]
+	DBGSTR 'h', 0x0D, 0x0A
+
+	mov [.previous_edi], edi  ; save EDI for retry
+
+	mov eax, [.LBA]		; LBA address
+	mov edx, .read_params	; CHS address location
+	call floppy_LBA_to_CHS	; convert LBA address to CHS address
+				; bytes 0, 1, 2 of .read_params
+
+	call .determine_MT_EOT	; compute MT, EOT, [.to_transfer]
+				; bytes 3, 4 of .read_params and [.to_transfer]
+
+	mov al, [.drive_no]	; drive number
+	mov edx, .read_params	; CHS address, sector count
+	call floppy_cmd_read_begin  ; begin read command
+	or al, al		; is AL 0?
+	jnz .error		; if not, return with error
+
+	call floppy_cmd_read_data  ; data transfer
+	or al, al		; is AL 0?
+	jnz .reset		; if not, reset the controller and retry
+				; don't modify ECX from here, its value is
+				; verified later (after Result Phase)!
+
+	mov edx, .read_result	; result buffer
+	call floppy_cmd_read_end  ; read result bytes and terminate read command
+	or al, al		; is AL 0?
+	jnz .reset		; if not, reset the controller
+
+	mov al, [.read_result]      ; copy ST0 to debug variable
+	mov [floppy_debug_ST0], al
+
+	mov al, [.read_result+1]    ; copy ST1 to debug variable
+	mov [floppy_debug_ST1], al
+
+	mov al, [.read_result+2]    ; copy ST2 to debug variable
+	mov [floppy_debug_ST2], al
+
+	mov al, [.read_params+1]  ; head address
+	or al, [.read_params+4]   ; if MT = 1, H is always 1
+	shl al, 2
+	or al, [.drive_no]	; CL = H | drive number
+	or al, 40h		; CL = IC 1 | H | drive number
+
+	cmp al, [.read_result]	; verify ST0
+	jne .retry		; if not equal, retry command
+
+	cmp byte [.read_result+1], 80h  ; verify ST1 (EN set due to EOT transfer
+					; termination)
+	jne .retry		; if not equal, retry command
+
+	cmp byte [.read_result+2], 0  ; verify ST2
+	jne .retry		; if not equal, retry command
+
+	cmp byte [.read_result+6], 2  ; verify N == 0
+	jne .retry		; if not, retry command
+
+	mov eax, [.to_transfer]	; copy sector count that should have been read
+				; to registers
+	shl eax, 9		; byte count from sector count
+	cmp eax, ecx		; was the correct amount of data transfered?
+	jne .retry		; if not, retry the command
+				; ECX can be modified again
+
+	DEBUG 'a'
+	dec byte [.tmp]
+	jz .reset
+	DEBUG 'b'
+
+	mov eax, [.to_transfer]  ; number of sectors read
+	sub [.cnt], eax		 ; subtract from total sector count
+	jbe .finished		 ; if no sectors left to read, we're done
+
+	add [.LBA], eax		; otherwise, calculate address for next read
+				; (EAX is still [.to_transfer])
+
+	mov bl, 2+1		; reset maximum retry count
+	jmp .begin		; read more sectors
+
+.finished:
+	xor al, al		; return success code
+
+.done:
+	mov bl, al  ; save AL
+	pop eax     ; restore EAX
+	mov al, bl  ; reapply AL
+
+	pop edi  ; restore other registers
+	pop edx
+	pop ecx
+	pop ebx
+	ret
+
+.error:
+	mov al, 1		; error return code
+	jmp .done
+
+.determine_MT_EOT:
+	movzx ecx, byte [.read_params+1]  ; head at start address
+	imul ecx, 18		; offset due to side in cylinder
+	movzx eax, byte [.read_params+2]  ; sector at start address
+	add ecx, eax		; offset of start address to previous cylinder
+				; boundary + 1
+	dec ecx			; offset of start address to previous cylinder boundary
+	neg ecx			; -ECX
+
+	add ecx, 18 * 2		; count of sectors that can be transfered
+	mov eax, [.cnt]		; total count of sectors that shall be transfered
+
+	cmp eax, ecx		; shall the current cylinder be read completely?
+	jae .complete_cylinder
+
+	movzx ecx, byte [.read_params+2]  ; sector at start address
+	dec ecx			; convert to starting index 0
+	neg ecx			; - ECX
+	add ecx, 18		; 18 - ECX: only one side, count of bytes that
+				; can be read
+
+	cmp eax, ecx		; shall all possible bytes be read?
+	jae .complete_track
+
+	mov [.to_transfer], eax	; less than all possible bytes needed
+	movzx ecx, byte [.read_params+2]  ; sector at start address
+	add ecx, eax		; EOT = starting sector + sector count to read - 1
+	dec ecx			; EOT is inclusive
+	mov [.read_params+3], cl      ; store EOT
+	mov byte [.read_params+4], 0  ; MT = 0
+	ret
+
+.complete_track:
+	mov [.to_transfer], ecx	; all possible sectors shall be read
+	mov byte [.read_params+3], 18  ; EOT (whole track)
+	mov byte [.read_params+4], 0   ; MT = 0
+	ret
+
+.complete_cylinder:
+	mov [.to_transfer], ecx	; all sectors that can be transfered will be transfered
+	mov byte [.read_params+3], 18  ; EOT
+	mov byte [.read_params+4], 1   ; MT = 1
+	ret
+
+.drive_no db 0
+.LBA dd 0
+.cnt dd 0
+.to_transfer dd 0
+.previous_edi dd 0
+.tmp db 0
+
+.read_params times 5 db 0  ; C, H, R, count of blocks, MT
+.read_result times 7 db 0  ; ST0, ST1, ST2, C, H, R, N
+
+
 ; Function:   floppy_reset
 ; Purpose:    to reset the floppy controller in a fully processor state preserving
 ;             way (except EFLAGS). All flags of DOR are preserved, expecially the
@@ -921,8 +1527,11 @@ floppy_reset:
 	; drive polling mode disabled, not required to send 4 Sense Interrupt commands
 	; FIFOs locked, no need for new Configure command
 
-	or word [floppy_status], 3h     ; set Specify Required flag as well as
-	                                ; Select Required flag
+	or word [floppy_status],
+		1 << FD_RECAL_REQUIRED |
+		1 << FD_RECONF_REQUIRED |
+		3h     ; set RECAL, RECONF, SLR, SPR
+
 	inc dword [floppy_reset_count]  ; increase reset count
 
 .end:
@@ -1016,10 +1625,10 @@ floppy_motor_off:
 	push ecx
 	push edx
 
-	cmp eax, 3		; drive number <= 3?
+	cmp al, 3		; drive number <= 3?
 	ja .end			; if not, return
 
-	mov ecx, eax		; copy eax to ecx
+	movzx ecx, al		; copy al to ecx
 
 	mov ax, [floppy_motors+ecx*2]  ; read the drive's cutoff timer value
 				       ; this is done first, then it is no problem,
@@ -1162,8 +1771,8 @@ floppy_wait_IRQ6_end:
 	push ebx  ; save registers
 
 	mov ebx, eax		; EAX needed for parameters
-	mov eax, 1		; wait at least 1 ms, waiting will get in sync
-				; first waiting period
+	mov eax, 1		; wait 1 ms, waiting will get in sync first
+				; waiting period
 
 .loop:
 	test word [floppy_status], FD_WAIT_INTERRUPT  ; did an interrupt already occur?
@@ -1192,6 +1801,14 @@ floppy_wait_IRQ6_end:
 	jnz .wait_infinite	; if yes, wait longer
 
 	xor eax, eax		; no timeout exceeded, because timeout is infinite
+	ret
+
+; Function:   floppy_wait_IRQ6_cancel
+; Purpose:    to abort waiting for an IRQ6 initiated with floppy_wait_IRQ6_start.
+;             The processor state is fully preserved (except EFLAGS).
+; Parameters: none
+floppy_wait_IRQ6_cancel:
+	and word [floppy_status], ~FD_WAIT_INTERRUPT
 	ret
 
 ; =========================
@@ -1309,6 +1926,35 @@ floppy_cmd_end:
 	pop edx  ; restore registers
 	ret
 
+; Function:   floppy_cmd_wait_busy
+; Purpose:    to wait for the controller to enter busy state in a fully
+;             processor state preserving way (except EFLAGS).
+; Parameters: none
+; Returns:    CF set in case of timeout, cleared otherwise
+floppy_cmd_wait_busy:
+	push edx  ; save registers
+
+	mov cl, 200+1		; timeout
+	mov dx, MSR		; DX = MSR
+
+.loop:
+	dec cl			; decrement timeout
+	jz .error		; return in case of timeout
+
+	in al, dx		; query MSR
+	test al, 10h		; is BSY 1?
+	jz .loop		; if not, wait
+
+	clc			; return with success
+	jmp .end
+
+.error:
+	stc			; error return code
+
+.end:
+	pop edx  ; restore registers
+	ret
+
 ; Function:   floppy_cmd_result
 ; Purpose:    to wait with timeout until a result byte is available (RQM 1,
 ;             DIO 1, BSY 1) and read the byte.
@@ -1421,6 +2067,50 @@ floppy_disable_interrupt:
 	pop eax
 	ret
 
+; Function:   floppy_LBA_to_CHS
+; Purpose:    to convert a LBA address stored in a register to a CHS address
+;             stored at a 3 byte memory location in the following format:
+;                0x0: C
+;                0x1: H
+;                0x2: S
+;             Only 256 cylinders are supported, a LBA that leads to a higher
+;             cylinder address than 255 will cause the cylinder address to wrap
+;             around.
+;             The processor state is not modified (except EFLAGS).
+; Parameters: EAX [IN] = LBA address
+;             EDX [IN] = memory address
+floppy_LBA_to_CHS:
+	push eax  ; save registers
+	push ebx
+	push ecx
+	push edx
+
+	mov ecx, edx		; copy destination buffer address to ECX so EDX
+				; is free for use by DIV
+
+	xor edx, edx		; EDX:EAX = LBA
+
+	mov ebx, 18		; 18 sectors per track
+	div ebx			; EAX = LBA / SectorsPerTrack,
+				; EDX = LBA % SectorsPerTrack
+
+	inc edx			; EDX = LBA % SectorsPerTrack + 1 =: S
+	mov [ecx+2], dl		; edx < SectorsPerTrack + 1 = 19
+
+	xor edx, edx		; EDX:EAX = LBA / SectorsPerTrack
+	mov ebx, 2		; 2 heads
+	div ebx			; EAX = LBA / SectorsPerTrack / NumOfHeads =: C
+				; EDX = (LBA / SectorsPerTrack) % NumOfHeads =: H
+
+	mov [ecx+1], dl		; edx < NumOfHeads = 2
+	mov [ecx], al		; only 256 cylinders supported
+
+	pop edx  ; restore registers
+	pop ecx
+	pop ebx
+	pop eax
+	ret
+
 ; ==============================
 ; Debugging functions start here
 ; ==============================
@@ -1462,6 +2152,9 @@ floppy_debug_update:
 	call .do_line0
 	call .do_line1
 	call .do_dumpreg  ; occupies 3 lines
+	call .do_line5
+	call .do_line6
+	call .do_line7
 	call .do_line9
 
 .end:
@@ -1485,8 +2178,23 @@ floppy_debug_update:
 	call .do_errors
 	ret
 
+.do_line5:
+	lea edi, [ebx+5*80*2]  ; line 5
+	call .do_ST0
+	ret
+
+.do_line6:
+	lea edi, [ebx+6*80*2]  ; line 6
+	call .do_ST1
+	ret
+
+.do_line7:
+	lea edi, [ebx+7*80*2]  ; line 7
+	call .do_ST2
+	ret
+
 .do_line9:
-	lea edi, [ebx+9*80*2]; line 9
+	lea edi, [ebx+9*80*2]  ; line 9
 	call .do_driver_status
 	ret
 
@@ -1563,7 +2271,7 @@ floppy_debug_update:
 	call floppy_debug_string
 	mov al, [.dumpreg_data+ecx-1]	; drive X's PCN
 	call floppy_debug_byte
-	loop .loop_PCN
+	loop .loop_PCN, ecx
 
 	add edi, 13 * 2			; goto next line
 
@@ -1628,7 +2336,7 @@ floppy_debug_update:
 	test al, dl
 	call floppy_debug_case_string	; print bit
 	shr dl, 1			; shift bitmask
-	loop .loop_eis
+	loop .loop_eis, cx
 
 	mov esi, .msg_FIFOTHR		; FIFOTHR message
 	call floppy_debug_string
@@ -1658,16 +2366,59 @@ floppy_debug_update:
 	mov esi, .msg_driver_status	; print message
 	call floppy_debug_string
 
-	mov esi, .msg_INT		; INT, COE, SLR, SPR
-	mov dx, 0008h			; bitmask
-	mov cx, 4			; 4 flags
+	mov esi, .msg_INT		; RECAL, RECONF, INT, COE, SLR, SPR
+	mov dx, 0020h			; bitmask
+	mov cx, 6			; 6 flags
 
 .loop_driver_status:
 	test [floppy_status], dx
 	call floppy_debug_case_string	; print flag
 	shr dx, 1			; shift bitmask
-	loop .loop_driver_status
+	loop .loop_driver_status, cx
 	ret
+
+.do_ST0:
+	mov esi, .msg_ST0		; print message
+	call floppy_debug_string
+
+	mov dl, 80h			; bitmask
+	mov cx, 8			; 8 flags
+
+.loop_ST0:
+	test [floppy_debug_ST0], dl
+	call floppy_debug_case_string	; print flag
+	shr dl, 1			; shift bitmask
+	loop .loop_ST0, cx
+	ret
+
+.do_ST1:
+	mov esi, .msg_ST1		; print message
+	call floppy_debug_string
+
+	mov dl, 80h			; bitmask
+	mov cx, 8			; 8 flags
+
+.loop_ST1:
+	test [floppy_debug_ST1], dl
+	call floppy_debug_case_string	; print flag
+	shr dl, 1			; shift bitmask
+	loop .loop_ST1, cx
+	ret
+
+.do_ST2:
+	mov esi, .msg_ST2		; print_message
+	call floppy_debug_string
+
+	mov dl, 80h			; bitmask
+	mov cx, 8			; 8 flags
+
+.loop_ST2:
+	test [floppy_debug_ST2], dl
+	call floppy_debug_case_string	; print flag
+	shr dl, 1			; shift bitmask
+	loop .loop_ST2, cx
+	ret
+
 
 
 .msg_MSR  db 'MSR: ', 0
@@ -1722,10 +2473,21 @@ floppy_debug_update:
 .msg_PRETRK db ' PRETRK: ', 0
 
 .msg_driver_status db 'driver status: ', 0
+.msg_RECAL db 'recal ', 0
+.msg_RECONF db 'reconf ', 0
 .msg_INT db 'int ', 0
 .msg_COE db 'coe ', 0
 .msg_SLR db 'slr ', 0
 .msg_spr db 'spr', 0
+
+.msg_ST0 db 'ST0: ', 0, ' IC1 ', 0, ' IC0 ', 0, ' SE  ', 0, ' EC  ', 0, '  -  ', 0
+         db '  H  ', 0, ' DS1 ', 0, ' DS0', 0
+
+.msg_ST1 db 'ST1: ', 0, ' EN  ', 0, '  -  ', 0, ' DE  ', 0, ' OR  ', 0, '  -  ', 0
+         db ' ND  ', 0, ' NW  ', 0, ' MA', 0
+
+.msg_ST2 db 'ST2: ', 0, '  -  ', 0, ' CM  ', 0, ' DD  ', 0, ' WC  ', 0, '  -  ', 0
+         db '  -  ', 0, ' BC  ', 0, ' MD', 0
 
 
 .dumpreg_data times 10 db 0
@@ -1938,9 +2700,15 @@ floppy_debug_byte:
 
 floppy_debug_location dd 0
 
+floppy_debug_ST0 db 0  ; debug variable for ST0
+floppy_debug_ST1 db 0  ; debug variable for ST1
+floppy_debug_ST2 db 0  ; debug variable for ST2
+
 
 ; ---------------------------------------------------
 ; status word:
+FD_RECAL_REQUIRED equ 20h  ;   :  the drives have not been recalibrated yet
+FD_RECONF_REQUIRED equ 10h ;   :  the controller has not been configured yet (e.g. after reset)
 FD_WAIT_INTERRUPT equ 8 ; (INT):  this flag is used to wait for an IRQ 6
 ;     4h: Cut Off Enabled (COE):  if 0, the motor timers will be halted until it is set to 1
 ;     2h: Select Required (SLR):  the selected drive is invalid (e.g. after reset, initialization)

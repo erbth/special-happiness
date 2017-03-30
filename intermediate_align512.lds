@@ -9,5 +9,6 @@ SECTIONS
 	. = 0;
 	.text : {
 		*(.text)
+		. = ALIGN(0x200);  /* align to full block */
 	}
 }

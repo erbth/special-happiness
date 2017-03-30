@@ -100,22 +100,22 @@ create_GDT:
 ; Code descriptor
 ; 31 ...... 24, 23,   22,     21,   20,   19 ...... 16, 15,   14, 13, 12,   11,       10,   9,    8,    7 ......... 0
 ; ------------------------------------------------------------------------------------------------------------------|
-; | Base 31:24 | G=0 | D/B=1 | L=0 | AVL | Limit 19:16 | P=1 | DPL=0 | S=1 | Code(1) | C=0 | R=0 | A=0 | Base 23:16 |
+; | Base 31:24 | G=1 | D/B=1 | L=0 | AVL | Limit 19:16 | P=1 | DPL=0 | S=1 | Code(1) | C=0 | R=0 | A=0 | Base 23:16 |
 ; |-----------------------------------------------------------------------------------------------------------------|
 ; |                         Base 15:0                  |                       Limit 15:0                           |
 ; -------------------------------------------------------------------------------------------------------------------
 
-.code_descriptor dw 0xFFFF, 0x0000, 0x9800, 0x004F
+.code_descriptor dw 0xFFFF, 0x0000, 0x9800, 0x00CF
 
 ; Data descriptor
 ; 31 ...... 24, 23,   22,     21,   20,   19 ...... 16, 15,   14, 13, 12,   11,       10,   9,    8,    7 ......... 0
 ; ------------------------------------------------------------------------------------------------------------------|
-; | Base 31:24 | G=0 | D/B=1 | L=0 | AVL | Limit 19:16 | P=1 | DPL=0 | S=1 | Data(0) | D=0 | W=1 | A=0 | Base 23:16 |
+; | Base 31:24 | G=1 | D/B=1 | L=0 | AVL | Limit 19:16 | P=1 | DPL=0 | S=1 | Data(0) | D=0 | W=1 | A=0 | Base 23:16 |
 ; |-----------------------------------------------------------------------------------------------------------------|
 ; |                         Base 15:0                  |                       Limit 15:0                           |
 ; -------------------------------------------------------------------------------------------------------------------
 
-.data_descriptor dw 0xFFFF, 0x0000, 0x9200, 0x004F
+.data_descriptor dw 0xFFFF, 0x0000, 0x9200, 0x00CF
 
 ; Function: load_gdtr
 ;
@@ -442,7 +442,7 @@ TEXT_VIDEO_START equ 0xB8000
 ; extern symbols
 extern floppy_init, floppy_timer, floppy_get_drive_type, floppy_get_reset_count
 extern floppy_get_error_count, floppy_IRQ6_handler, floppy_debug_update
-extern floppy_debug_set
+extern floppy_debug_set, floppy_test, floppy_read_data
 
 bits 32
 entry_of_protected_mode:
@@ -489,7 +489,39 @@ entry_of_protected_mode:
 	mov esi, .p_msgOK		; otherwise, print OK
 	call p_print_string
 
-	call .floppy_info
+	call .floppy_info  ; print some information
+
+	mov eax, 3000			; wait 3 seconds
+	call sleep
+
+	call screen_clear
+	call screen_home
+
+	mov esi, .p_msgFloppyReading
+	call p_print_string
+
+	mov al, 0			; drive 0
+	extern LOADER_SIZE
+	mov ebx, [LOADER_SIZE]		; bytes
+	shr ebx, 9			; LBA
+	mov ecx, (KERNEL_SIZE + 1FFh) / 200h + 36  ; sector count
+	mov edi, 1000000H		; 16 MB
+	call floppy_read_data		; read data
+	or eax, eax			; is EAX 0?
+	jnz .floppy_read_error
+
+	mov esi, .p_msgOK
+	call p_print_string
+
+	mov eax, 3000
+	call sleep
+
+	call screen_clear		; clear screen
+	call screen_home
+
+	mov esi, 1000000H + 36 * 200H	; start address
+	mov byte [esi+KERNEL_SIZE], 0	; zero terminate string, to be sure
+	call p_print_string		; print string
 
 	jmp .end  ; done
 
@@ -503,6 +535,11 @@ entry_of_protected_mode:
 	call p_print_string
 
 	call .floppy_info
+	jmp .end
+
+.floppy_read_error:
+	mov esi, .p_msgFailed
+	call p_print_string
 	jmp .end
 
 
@@ -536,6 +573,7 @@ entry_of_protected_mode:
 .p_msgFloppyInitializing db 'Initializing floppy (controller and driver) ... ', 0
 .p_msgFloppyResetCount db 'floppy controller reset count: 0x', 0
 .p_msgFloppyErrorCount db 'floppy error count: 0x', 0
+.p_msgFloppyReading db 'Reading from floppy ... ', 0
 .p_msgOK db '[ OK ].', 0x0D, 0x0A, 0
 .p_msgFailed db '[failed]', 0x0D, 0x0A, 0
 p_msgCRLF db 0x0D, 0x0A, 0
@@ -1017,10 +1055,16 @@ isr_NP:
 ; Purpose:    to handle General Protection Fault Exceptions being registered in
 ;             the IDT
 isr_GPF:
-	push eax  ; save eax, needed by p_print_string
-	push esi  ; esi also needed
+	push eax  ; save registers
+	push esi
 
-	mov esi, .msg
+	mov esi, .msg1
+	call p_print_string
+
+	mov eax, [esp+8]
+	call p_print_hex
+
+	mov esi, .msg2
 	call p_print_string
 
 .endless_loop:
@@ -1032,7 +1076,8 @@ isr_GPF:
 	add esp, 4  ; GPF has a 32 bit error code pushed onto the stack
 	iretd
 
-.msg db 'Exception: General Protection Fault', 0x0D, 0x0A, 0
+.msg1 db 0x0D, 0x0A, 'Exception: General Protection Fault (Error code: ', 0
+.msg2 db 'h)', 0x0D, 0x0A, 0
 
 ; Function:   isr_NMI
 ; Purpose:    to handle Non-maskable Interrupts by aborting execution
