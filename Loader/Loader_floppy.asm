@@ -17,7 +17,7 @@
 ;       reset reselect drive
 ;
 ; see http://wiki.osdev.org/FDC
-section LOADER
+section .text
 bits 32
 
 %macro DEBUG 1
@@ -995,7 +995,7 @@ floppy_recalibrate:
 	mov al, ch		; drive number
 	call floppy_cmd_recalibrate  ; issue Recalibrate command
 	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	jnz .error_cancel_IRQ6	; if not, return with error
 
 	mov eax, 4001                  ; timeout: >~4s
 	call floppy_wait_IRQ6_end      ; wait for interrupt
@@ -1026,9 +1026,11 @@ floppy_recalibrate:
 	pop ebx
 	ret
 
+.error_cancel_IRQ6:
+	call floppy_wait_IRQ6_cancel   ; cancel possible waiting for IRQ6
+
 .error:
 	call floppy_disable_interrupt  ; disable possibly enabled interrupt
-	call floppy_wait_IRQ6_cancel   ; cancel possible waiting for IRQ6
 
 	mov al, 1		; error return code
 	jmp .end
@@ -1194,7 +1196,7 @@ floppy_seek:
 	mov ah, [.NCN]		; NCN
 	call floppy_cmd_seek	; seek command
 	or al, al		; is AL 0?
-	jnz .error		; if not, return with error
+	jnz .error_cancel_IRQ6	; if not, return with error
 
 	mov eax, 4001		; wait >~4s
 	call floppy_wait_IRQ6_end      ; wait for interrupt
@@ -1224,9 +1226,11 @@ floppy_seek:
 	pop ebx
 	ret
 
+.error_cancel_IRQ6:
+	call floppy_wait_IRQ6_cancel   ; cancel possible waiting for interrupt
+
 .error:
 	call floppy_disable_interrupt  ; disable possibly enabled interrupt
-	call floppy_wait_IRQ6_cancel   ; cancel possible waiting for interrupt
 
 	mov al, 1		; error return code
 	jmp .end
@@ -1290,6 +1294,11 @@ floppy_read:
 	mov edx, .read_params	; CHS address location
 	call floppy_LBA_to_CHS	; convert LBA address to CHS address
 				; bytes 0, 1, 2 of .read_params
+
+	cmp byte [.read_params], 82  ; Not more than 83 cylinders
+				     ; Possibly, this would lead to ND set in ST1
+				     ; anyway, with a 80 cylinder disk it does.
+	ja .error
 
 	call .determine_MT_EOT	; compute MT, EOT, [.to_transfer]
 				; bytes 3, 4 of .read_params and [.to_transfer]
@@ -1766,7 +1775,7 @@ floppy_wait_IRQ6:
 ; Function:   floppy_wait_IRQ6_start
 ; Purpose:    to start waiting for an IRQ 6 if it is likely that the interrupt
 ;             will occure before floppy_wait_IRQ6_end is called. MUST be followed
-;             by a call to floppy_wait_IRQ6_end or floppy_eait_IRQ6_cancel.
+;             by a call to EITHER floppy_wait_IRQ6_end OR floppy_eait_IRQ6_cancel.
 ;             The function is fully processor state preserving (except EFLAGS).
 ; Parameters: none
 floppy_wait_IRQ6_start:

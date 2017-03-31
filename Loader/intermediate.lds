@@ -5,12 +5,7 @@ OUTPUT_ARCH(i386)      /* Is this a good idea? What about emulation? */
 
 SECTIONS
 {
-	. = 0;
-
-	LOADER : {
-		*(LOADER)
-	}
-	
+	. = 0;	
 	.text : {
 		*(.text)
 	}

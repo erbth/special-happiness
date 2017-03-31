@@ -3,7 +3,7 @@
 	call print_string
 %endmacro
 
-section LOADER
+section .text
 
 ; org 0x7C00	; done by linker
 bits 16		; tell the assembler we want 16 bit code

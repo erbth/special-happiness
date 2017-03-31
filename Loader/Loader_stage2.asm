@@ -1,4 +1,4 @@
-section LOADER
+section .text
 ; org 0x7E00  ; done by linker
 bits 16
 
@@ -494,13 +494,13 @@ entry_of_protected_mode:
 	mov esi, .p_msgFloppyReading
 	call p_print_string
 
+	; Read first sector of kernel that contains size information
 	mov al, 0			; drive 0
-	extern LOADER_SIZE
-	mov ebx, [LOADER_SIZE]		; bytes
-	add ebx, 1FFh			; round to full blocks
+	extern text_size
+	mov ebx, text_size		; offset on disk in bytes (aligned to 200h)
 	shr ebx, 9			; LBA
-	mov ecx, (KERNEL_SIZE + 1FFh) / 200h  ; sector count
-	mov edi, 0x1000000		; 16 MB
+	mov ecx, 1			; sector count
+	mov edi, 0x100000		; 1 MB
 	call floppy_read_data		; read data
 	or eax, eax			; is EAX 0?
 	jnz .floppy_read_error
@@ -508,12 +508,62 @@ entry_of_protected_mode:
 	mov esi, .p_msgOK
 	call p_print_string
 
-	mov esi, .p_msgKernel
+	mov ecx, [0x100000]		; read kernel size
+
+	mov esi, .p_msgKernelSize1	; print kernel size
 	call p_print_string
 
-	mov byte [debug_active], 0	; disable debug views
+	mov eax, ecx			; value
+	call p_print_hex
 
-	jmp 0x1000000			; Kernel's entry point
+	mov esi, .p_msgKernelSize2	; suffix and CRLF
+	call p_print_string
+
+	cmp ecx, 0E00000h		; kernel to large to fit below ISA memory hole?
+	ja .kernel_too_large
+
+	add ecx, 1FFh			; round to full sectors
+	shr ecx, 9			; bytes to sectors
+
+	cmp ecx, 1			; if size <= 1 sector, we're done
+	jbe .transfer_control
+
+	mov esi, .p_msgFloppyReading
+	call p_print_string
+
+	dec ecx				; one sector already read
+	inc ebx				; update LBA
+	add edi, 200h			; update destination
+	mov al, 0			; drive number was destroyed
+	call floppy_read_data		; read remaining sectors
+	or eax, eax			; is EAX 0?
+	jnz .floppy_read_error
+
+	mov esi, .p_msgOK
+	call p_print_string
+
+.transfer_control:
+	mov esi, .p_msgKernelExecution
+	call p_print_string
+
+	mov ecx, 5
+
+.wait_transfer:
+	mov eax, ecx
+	call p_print_hex
+
+	mov al, 0x0D
+	call p_putchar
+
+	mov eax, 1000			; 1 second
+	call sleep
+	loop .wait_transfer, ecx
+
+	mov al, 0FFh			; disable interrupts
+	out 0x21, al			; write to primary PIC
+	out 0xA1, al			; write to secondary PIC
+
+	jmp 0x100000			; Kernel's entry point
 
 .end:
 	hlt
@@ -532,6 +582,10 @@ entry_of_protected_mode:
 	call p_print_string
 	jmp .end
 
+.kernel_too_large:
+	mov esi, .p_msgKernelTooLarge
+	call p_print_string
+	jmp .end
 
 .floppy_info:
 	call floppy_get_drive_type	; retrieve detected drive type
@@ -566,7 +620,10 @@ entry_of_protected_mode:
 .p_msgFloppyReading db 'Reading from floppy ... ', 0
 .p_msgOK db '[ OK ]', 0x0D, 0x0A, 0
 .p_msgFailed db '[failed]', 0x0D, 0x0A, 0
-.p_msgKernel db 'Transfering execution to the kernel', 0x0D, 0x0A, 0
+.p_msgKernelSize1 db 'Kernel size: ', 0
+.p_msgKernelSize2 db 'h bytes', 0x0D, 0x0A, 0
+.p_msgKernelTooLarge db 'The Kernel is too large to fit below the ISA memory hole.', 0x0D, 0x0A, 0
+.p_msgKernelExecution db 'Transfering execution to the kernel in:', 0x0D, 0x0A, 0
 p_msgCRLF db 0x0D, 0x0A, 0
 
 
@@ -1126,9 +1183,6 @@ isr_IRQ0_PIT:
 	iretd
 
 .update_debug_views:
-	cmp byte [debug_active], 0
-	je .no_action
-
 	inc byte [debug_update_counter]		; simple prescaler
 	cmp byte [debug_update_counter], 33	; / 33
 	jb .no_action				; not reached yet
@@ -1307,4 +1361,3 @@ sleep_engaged db 0
 sleep_delay   dd 0
 
 debug_update_counter db 0	; prescaler for updating debug view(s)
-debug_active db 1
