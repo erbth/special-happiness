@@ -4,10 +4,29 @@
 OUTPUT_FORMAT(binary)
 OUTPUT_ARCH(i386)      /* Is this a good idea? What about emulation? */
 
+binary_vma = 0x100000;  /* VMA of the output binary file at runtime */
+
 SECTIONS
 {
-	. = 0x100000;
-    .text : { *(.text) }
+	. = binary_vma;
 
-    text_size = SIZEOF (.text);  /* size of entire .text section as absolute symbol */
+    .text : {
+        *(.text)
+        *(.text.hot)
+        *(.text.unlikely)
+    }
+
+    .data : { *(.data) }
+
+    /* size of binary (all sections beeing loaded) as absolute symbol */
+    binary_size = . - binary_vma;
+
+    /* uninitialized data, not loaded */
+    .bss : {
+        *(COMMON)
+        *(.bss)
+    }
+
+    /* comment, not loaded */
+    .comment : { *(.comment) }
 }

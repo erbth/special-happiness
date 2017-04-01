@@ -1,8 +1,9 @@
 export OBJ_BASE:=bin
 
 export NASM=nasm
-export LD=ld
-export SIZE=size
+export CC="/home/therb/opt/cross/bin/i686-elf-gcc"
+export LD="/home/therb/opt/cross/bin/i686-elf-ld"
+export SIZE="/home/therb/opt/cross/bin/i686-elf-size"
 export AWK=awk
 export CAT=cat
 export DD=dd

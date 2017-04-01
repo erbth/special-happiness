@@ -1,27 +1,32 @@
 NFLAGS:=-f elf
+CFLAGS:=-ffreestanding -O2 -Wall -Wextra -Werror -std=gnu99 -fno-asynchronous-unwind-tables
 OBJ_BASE:=../$(OBJ_BASE)
 OBJ_DIR=$(OBJ_BASE)/$(MODULE)
 
-NASM=nasm
-LD=ld
-SIZE=size
-AWK=awk
+LD=$(CC)
 
 MODULE=Kernel
-TARGET=Kernel
+TARGET=Kernel.bin
 
 # Order matters!
 OBJS= Entry.o \
+	  kernel.o \
       Text.o
 
 .PHONY: all
-all: $(OBJ_DIR)/$(TARGET).bin
+all: $(OBJ_DIR)/$(TARGET)
 
-$(OBJ_DIR)/$(TARGET).bin: $(OBJS:%=$(OBJ_DIR)/%)
-	$(LD) -T flat_binary.lds -o $@ $^
+$(OBJ_DIR)/$(TARGET): $(OBJS:%=$(OBJ_DIR)/%)
+	$(LD) -T flat_binary.lds $(CFLAGS) -nostdlib -lgcc -o $@ $^
 
 $(OBJ_DIR)/%.o: %.asm
 	$(NASM) $(NFLAGS) -o $@ $<
+
+$(OBJ_DIR)/%.o: %.c
+	$(CC) $(CFLAGS) -o $@ -c $<
+
+$(OBJ_DIR)/%.s: %.c
+	$(CC) $(CFLAGS) -S -o $@ $<
 
 $(OBJS:%=$(OBJ_DIR)/%): | $(OBJ_DIR)
 $(OBJ_DIR)/$(TARGET): | $(OBJ_DIR)

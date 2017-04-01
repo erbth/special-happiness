@@ -563,7 +563,7 @@ entry_of_protected_mode:
 	out 0x21, al			; write to primary PIC
 	out 0xA1, al			; write to secondary PIC
 
-	jmp 0x100000			; Kernel's entry point
+	jmp 0x100004			; Kernel's entry point
 
 .end:
 	hlt
