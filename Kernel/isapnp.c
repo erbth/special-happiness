@@ -129,7 +129,7 @@ uint8_t isapnp_read_id(uint8_t *id)
 				card_detected = 1;
 				id[i] = ((id[i] >> 1) & 0x7F) | 0x80;
 			}
-			else if (input == 0)
+			else if (input == 0xFFFF)
 			{
 				id[i] = (id[i] >> 1) & 0x7F;
 			}
@@ -157,33 +157,33 @@ void isapnp_detect(void)
 	isapnp_device devices[ISAPNP_MAX_NUM_DEVICES];
 	uint8_t next_csn;
 
+	isapnp_rpa = 0x203;
+
 	isapnp_send_initiation_key();
 	isapnp_reset_csns();
 
+	isapnp_wake(0);				// wake all cards with unconfigured csn
+	isapnp_set_read_port_address(isapnp_rpa);
+
 	next_csn = 1;
 
-	for (isapnp_rpa = 0x203; nDevices == 0 && isapnp_rpa <= 0x3FF; isapnp_rpa += 4)
+	while (1)
 	{
-		while (1)
+		isapnp_select_isolation();
+
+		if (!isapnp_read_id(devices[nDevices].pnp_id))
 		{
-			isapnp_wake(0);				// wake all cards with unconfigured csn
-			isapnp_set_read_port_address(isapnp_rpa);
-			isapnp_select_isolation();
+			break;
+		}
 
-			if (!isapnp_read_id(devices[nDevices].pnp_id))
-			{
-				break;
-			}
+		isapnp_set_csn(next_csn++);
 
-			isapnp_set_csn(next_csn++);
+		nDevices++;
 
-			nDevices++;
-
-			if (nDevices >= ISAPNP_MAX_NUM_DEVICES)
-			{
-				terminal_writestring("ISAPNP: maximum number of cards reached.\n");
-				break;
-			}
+		if (nDevices >= ISAPNP_MAX_NUM_DEVICES)
+		{
+			terminal_writestring("ISAPNP: maximum number of cards reached.\n");
+			break;
 		}
 	}
 
@@ -191,12 +191,23 @@ void isapnp_detect(void)
 	{
 		terminal_writestring("ISAPNP: read io port: 0x");
 		terminal_hex_word(isapnp_rpa);
-		terminal_writestring("\nISAPNP: 0x");
+		terminal_writestring("\nISAPNP: ");
 		terminal_hex_byte(nDevices);
-		terminal_writestring(" cards detected.\n");
+		terminal_writestring("h cards detected.\n");
 	}
 	else
 	{
 		terminal_writestring("ISAPNP: no card detected.\n");
 	}
+
+
+/*
+
+
+	for (isapnp_rpa = 0x203; nDevices == 0 && isapnp_rpa <= 0x3FF; isapnp_rpa += 4)
+	{
+
+	}
+
+	 */
 }

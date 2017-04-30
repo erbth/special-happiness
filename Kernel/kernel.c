@@ -146,7 +146,7 @@ extern "C"  /* use C linkage for kernel_main */
 void kernel_main (void) {
 	/* Initialize terminal interface */
 	terminal_initialize ();
-	terminal_writestring (text);
+	// terminal_writestring (text);
 
 	/* PnP detect cards */
 	isapnp_detect();
