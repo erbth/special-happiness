@@ -11,10 +11,11 @@ TARGET=Kernel.bin
 # Order matters!
 OBJS= Entry.o \
 	  kernel.o \
+	  isapnp.o \
       Text.o
 
 .PHONY: all
-all: $(OBJ_DIR)/$(TARGET)
+all: $(OBJ_DIR)/$(TARGET) $(OBJ_DIR)/isapnp.s
 
 $(OBJ_DIR)/$(TARGET): $(OBJS:%=$(OBJ_DIR)/%)
 	$(LD) -T flat_binary.lds $(CFLAGS) -nostdlib -lgcc -o $@ $^

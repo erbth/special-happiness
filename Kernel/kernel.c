@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "isapnp.h"
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -114,12 +115,39 @@ void terminal_writestring (const char* data) {
 	terminal_write (data, strlen (data));
 }
 
+void terminal_hex_byte(uint8_t byte)
+{
+	char first_digit = (byte >> 4) + '0';
+	char last_digit = (byte & 0x0F) + '0';
+
+	if (first_digit > '9')
+	{
+		first_digit += 'A' - '9' - 1;
+	}
+
+	if (last_digit > '9')
+	{
+		last_digit += 'A' - '9' - 1;
+	}
+
+	terminal_putchar(first_digit);
+	terminal_putchar(last_digit);
+}
+
+void terminal_hex_word(uint16_t word)
+{
+	terminal_hex_byte((uint8_t) ((word >> 8) & 0xFF));
+	terminal_hex_byte((uint8_t) (word & 0xFF));
+}
+
 #if defined(__cplusplus)
 extern "C"  /* use C linkage for kernel_main */
 #endif
 void kernel_main (void) {
 	/* Initialize terminal interface */
 	terminal_initialize ();
-
 	terminal_writestring (text);
+
+	/* PnP detect cards */
+	isapnp_detect();
 }
