@@ -20,5 +20,6 @@ void terminal_writestring (const char* data);
 
 void terminal_hex_byte(uint8_t byte);
 void terminal_hex_word(uint16_t word);
+void terminal_hex_dword(uint32_t dword);
 
 #endif /* _IO_H */

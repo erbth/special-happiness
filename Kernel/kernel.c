@@ -140,6 +140,12 @@ void terminal_hex_word(uint16_t word)
 	terminal_hex_byte((uint8_t) (word & 0xFF));
 }
 
+void terminal_hex_dword(uint32_t dword)
+{
+	terminal_hex_word((uint16_t) ((dword >> 16) & 0xFFFF));
+	terminal_hex_word((uint16_t) (dword & 0xFFFF));
+}
+
 #if defined(__cplusplus)
 extern "C"  /* use C linkage for kernel_main */
 #endif
