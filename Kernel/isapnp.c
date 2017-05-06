@@ -11,17 +11,158 @@
 #define ISAPNP_ADDRESS 0x279
 #define ISAPNP_WRITE   0xA79
 
+typedef struct _isapnp_card_resource_data isapnp_card_resource_data;
+typedef struct _isapnp_logical_device_resource_data isapnp_logical_device_resource_data;
+typedef struct _isapnp_dependent_function_resource_data isapnp_dependent_function_resource_data;
+typedef struct _isapnp_resource_memory_range isapnp_resource_memory_range;
+typedef struct _isapnp_resource_memory_range_8_16_bit isapnp_resource_memory_range_8_16_bit;
+typedef struct _isapnp_resource_memory_range_32_bit isapnp_resource_memory_range_32_bit;
+typedef struct _isapnp_resource_io_port_range isapnp_resource_io_port_range;
+typedef struct _isapnp_resource_dma_mask isapnp_resource_dma_mask;
+typedef struct _isapnp_resource_irq_mask isapnp_resource_irq_mask;
+
+
+struct _isapnp_resource_memory_range_8_16_bit
+{
+	struct
+	{
+		uint8_t writable : 1;					   // otherwise: ROM
+		uint8_t read_cachable : 1;				   // and write-through, otherwise: non-cachable
+		uint8_t decode_supports_high_address : 1;  // otherwise: range length
+		uint8_t memory_control : 2;		// 00: 8 bit, 01: 16 bit, 10: both supported
+		uint8_t is_shadowable : 1;
+		uint8_t is_expansion_ROM : 1;
+	} information;
+
+	uint16_t minimum_base_address;  // bits[23:8], lower 8 bits are assumed 0, so it is a 24 bit address
+	uint16_t maximum_base_address;  // bits[23:8], lower 8 bits are assumed 0, so it is a 24 bit address
+	uint16_t base_alignment;		// (0 = 64 KiByte)
+	uint16_t length;				// in 256 byte blocks
+};
+
+struct _isapnp_resource_memory_range_32_bit
+{
+	struct
+	{
+		uint8_t writable : 1;					   // otherwise: ROM
+		uint8_t read_cachable : 1;				   // and write-through, otherwise: non-cachable
+		uint8_t decode_supports_high_address : 1;  // otherwise: range length
+		uint8_t memory_control : 2;		// 00: 8 bit, 01: 16 bit, 10: both supported, 11: 32 bit
+		uint8_t is_shadowable : 1;
+		uint8_t is_expansion_ROM : 1;
+		uint8_t is_fixed : 1;			// if 1, the memory address is fixed and can not be configured.
+										// minimum_base = maximum_base will hold the base address, length
+										// the corresponding length and base_alignment is undefined.
+	} information;
+
+	uint32_t minimum_base_address;
+	uint32_t maximum_base_address;
+	uint32_t base_alignment;
+	uint32_t length;				// in 1 byte blocks
+};
+
+struct _isapnp_resource_memory_range
+{
+	uint16_t configuration_port;  // location of the corresponding logical device configuration register
+
+	enum
+	{
+		isapnp_resource_memory_range_type_8_16_bit,
+		isapnp_resource_memory_range_type_32_bit
+	} type;
+
+	union
+	{
+		isapnp_resource_memory_range_8_16_bit _8_16_bit;
+		isapnp_resource_memory_range_32_bit _32_bit;
+	} u;
+};
+struct _isapnp_resource_io_port_range
+{
+	uint16_t configuration_port;  // location of the corresponding logical device configuration register
+
+	uint8_t full_16_bit;			// if != 0, the device uses the full 16 bit ISA address,
+									// if 0, only ISA address bits[9:0] are decoded.
+
+	uint16_t minimum_base_address;
+	uint16_t maximum_base_address;
+	uint8_t base_alignment;			// in 1 byte blocks
+	uint8_t number_of_ports;		// number of contiguous I/O ports requested
+};
+
+struct _isapnp_resource_dma_mask
+{
+	uint16_t configuration_port;  // location of the corresponding logical device configuration register
+
+	uint8_t mask;				// supported DMA channel bit mask, bit 0 is channel 0
+
+	struct
+	{
+		uint8_t transfer_type_preference : 2;  // 00: 8-bit only, 01: 8- and 16-bit, 10: 16-bit only
+		uint8_t is_bus_master : 1;			   // otherwise: logical device is not a bus master
+		uint8_t execute_in_count_by_byte : 1;  // othersise: DMA may not execute in count by byte mode
+		uint8_t execute_in_count_by_word : 1;  // otherwise: DMA may not execute in count by word mode
+		uint8_t speed_support : 2;  // 00: compatibility mode, 01: Type A DMA, 10: Type B DMA, 11: Type F
+	} information;
+};
+
+struct _isapnp_resource_irq_mask
+{
+	uint16_t configuration_port;  // location of the corresponding logical device configuration register
+
+	uint16_t mask;				// supported IRQs, bit 0 represents IRQ0
+
+	struct
+	{
+		uint8_t low_true_level_sensitive : 1;	// interrupt driving capabilities
+		uint8_t high_true_level_sensitive : 1;
+		uint8_t low_true_edge_sensitive : 1;
+		uint8_t high_true_edge_sensitive : 1;	// default / must be supported for ISA compatibility
+	};
+};
+
+struct _isapnp_dependent_function_resource_data
+{
+	isapnp_resource_memory_range memory_range[4];
+	isapnp_resource_io_port_range io_port_range[8];
+	isapnp_resource_dma_mask dma_mask;
+	isapnp_resource_irq_mask irq_mask;
+};
+
+struct _isapnp_logical_device_resource_data
+{
+	uint16_t flags;					// (Byte6 << 8) | Byte5
+	char identifier_string[256];	// first 255 characters of the logical device's ansi identifier string
+
+	isapnp_resource_memory_range memory_range[4];
+	isapnp_resource_io_port_range io_port_range[8];
+	isapnp_resource_dma_mask dma_mask;
+	isapnp_resource_irq_mask irq_mask;
+
+	uint8_t n_dependent_functions;	// count of dependent functions read
+	isapnp_dependent_function_resource_data dependent_functions[4];
+									// maximum 4 dependent functions supported
+};
+
+struct _isapnp_card_resource_data
+{
+	uint8_t pnp_version_number;		// bits 7:4: major, bits 3:0: minor version (packed BCD)
+	char identifier_string[256];	// first 255 characters of the card's ansi identifier string
+
+	uint8_t n_logical_devices;		// count of logical devices on this card
+	isapnp_logical_device_resource_data logical_devices[4];
+									// not more than 4 logical devices supported
+};
+
 typedef struct
 {
-	uint32_t pnp_vendor_id;
-	uint32_t pnp_sn;
+	char vendor_string[4];
+	uint16_t product_id;
+	uint32_t sn;
 	uint8_t csn;
-	uint16_t io_base_port;
-	uint8_t irq;
-	void *mem_base;
-
-	char name[256];
+	isapnp_card_resource_data resource_data;
 } isapnp_device;
+
 
 /**********
 * globals *
@@ -88,6 +229,28 @@ void isapnp_reset_csns(void)
 	outb(ISAPNP_WRITE, 4);			// reset all csns to 0
 }
 
+/* Function:   isapnp_reset_configuration
+ * Purpose:    to reset the ISA PnP cards' configuration registers preserving
+ *             the CSN, RD_DATA port and current PnP state
+ * Parameters: none */
+void isapnp_reset_configuration(void)
+{
+	outb(ISAPNP_ADDRESS, 2);		// set the address register to configuration control
+	outb(ISAPNP_WRITE, 1);			// reset configuration
+	isapnp_delay();					// delay 1 msec (as spec requires)
+	isapnp_delay();					// In section 4.4 the spec requires to wait
+									// 2 msec after ResetCmd (is this a ResetCmd ?)
+}
+
+/* Function:   isapnp_return_to_wait_for_key
+ * Purpose:    to put the ISA PnP cards into Wait For Key state
+ * Parameters: none */
+void isapnp_return_to_wait_for_key(void)
+{
+	outb(ISAPNP_ADDRESS, 2);		// set the address register to configuration control
+	outb(ISAPNP_WRITE, 2);			// reset all csns to 0
+}
+
 /* Function:   isapnp_wake
  * Purpose:    to wake up a specific ISA PnP card or all cards
  * Parameters: csn: target card's csn or 0 to wake all cards */
@@ -134,7 +297,7 @@ void isapnp_set_csn(uint8_t csn)
  *                        serial number
  * Returns:    1 in case of success, 0 in case of failure or if no card has sent
  *             an id (possibly because no card is on the bus) */
-uint8_t isapnp_read_id(uint32_t *vendor_id, uint32_t *sn)
+uint8_t isapnp_read_id(char *vendor_string, uint16_t *product_id, uint32_t *sn)
 {
 	uint16_t input;
 	int card_detected = 0;
@@ -187,8 +350,158 @@ uint8_t isapnp_read_id(uint32_t *vendor_id, uint32_t *sn)
 		return 0;
 	}
 
-	*vendor_id = id[3] << 24 | id[2] << 16 | id[1] << 8 | id[0];
+	vendor_string[0] = ((id[0] >> 2) & 0x1F) + 'A' - 1;
+	vendor_string[1] = (((id[1] >> 5) & 0x07) | ((id[0] << 3) & 0x18)) + 'A' - 1;
+	vendor_string[2] = (id[1] & 0x1F) + 'A' - 1;
+	vendor_string[3] = 0;
+
+	*product_id = id[2] << 8 | id[3];
 	*sn        = id[7] << 24 | id[6] << 16 | id[5] << 8 | id[4];
+	return 1;
+}
+
+/* Function:   isapnp_read_resource_byte
+ * Purpose:    to read a byte of resource data from the card which is in config
+ *             state. The status register is respected.
+ * Parameters: none
+ * Returns:    the read byte */
+static inline uint8_t isapnp_read_resource_byte()
+{
+	uint8_t input;
+
+	outb(ISAPNP_ADDRESS, 0x05);
+	while (!(inb(isapnp_rpa) & 0x01)) { }  // poll status register (shall not be
+										   // optimized because inb is volatile)
+
+	outb(ISAPNP_ADDRESS, 0x04);
+	input = inb(isapnp_rpa);				// read resource data
+	return input;
+}
+
+void isapnp_read_resource_pnp_version(isapnp_device *card, uint16_t *length)
+{
+	if (*length > 0)
+	{
+		card->resource_data.pnp_version_number = isapnp_read_resource_byte();
+		(*length)--;
+	}
+
+	if (*length > 0)
+	{
+		// vendor specific version number
+		isapnp_read_resource_byte();
+		(*length)--;
+	}
+}
+
+void isapnp_read_resource_ansi_string(isapnp_device *card, uint16_t *length)
+{
+	int pos = 0;
+
+	while ((pos < 255) && (*length > 0))
+	{
+		card->resource_data.identifier_string[pos++] = isapnp_read_resource_byte();
+		(*length)--;
+	}
+
+	card->resource_data.identifier_string[pos] = 0;
+}
+
+/* Function:   isapnp_read_resource_data
+ * Purpose:    to read a card's reasource data
+ * Parameters: csn:     the card's CSN,
+ *             id_read: if != 0, the 72 bit card id has already been read,
+ *                      if 0, it has not
+ * Returns:    0 in case of failure, 1 otherwise */
+uint8_t isapnp_read_resource_data(uint8_t csn, uint8_t id_read)
+{
+	uint8_t input;
+	uint8_t end_reached = 0;
+	isapnp_device *card = NULL;
+
+	// find card
+	for (int i = 0; i < nDevices; i++)
+	{
+		if (devices[i].csn == csn)
+		{
+			card = &(devices[i]);
+		}
+	}
+
+	if (card == NULL)
+	{
+		terminal_writestring("ISAPNP: error: CSN ");
+		terminal_hex_byte(csn);
+		terminal_writestring("h not found.");
+		return 0;
+	}
+
+	// wake card and put others to sleep
+	isapnp_wake(csn);
+
+	if (id_read == 0)
+	{
+		// read 72 bit card id (put it to trash as it isn't needed, it is already known)
+		for (int i = 0; i < 9; i++)
+		{
+			isapnp_read_resource_byte();
+		}
+	}
+
+	do
+	{
+		input = isapnp_read_resource_byte();
+
+		// read resources
+		// only read tag identifiers
+		uint8_t resource_id;
+		uint16_t length;
+
+		if (input & 0x80)
+		{
+			resource_id = input;  // keep bit 8 to indicate large resource data type
+			length = isapnp_read_resource_byte();
+			length = (isapnp_read_resource_byte() << 8) | length;
+		}
+		else
+		{
+			// small resource data type
+			resource_id = (input >> 3) & 0x0F;
+			length = input & 0x07;
+		}
+
+		switch (input)
+		{
+		case 0x01:
+			isapnp_read_resource_pnp_version(card, &length);
+			break;
+
+		case 0x82:
+			isapnp_read_resource_ansi_string(card, &length);
+			break;
+
+		default:
+			terminal_writestring("ISAPNP: card ");
+			terminal_hex_byte(csn);
+			terminal_writestring(": unknown resource id: 0x");
+			terminal_hex_byte(resource_id);
+			terminal_putchar('\n');
+			return 0;
+		}
+
+		if (length != 0)
+		{
+			terminal_writestring("ISAPNP: card ");
+			terminal_hex_byte(csn);
+			terminal_writestring(": resource id: 0x");
+			terminal_hex_byte(input);
+			terminal_writestring(": length (");
+			terminal_hex_word(length);
+			terminal_writestring("h) != 0\n");
+		}
+
+	} while (!end_reached);
+
 	return 1;
 }
 
@@ -197,8 +510,9 @@ void isapnp_detect(void)
 {
 	uint8_t next_csn;
 
-	isapnp_send_initiation_key();
+	isapnp_send_initiation_key();	// cards have to be resetted before read port change
 	isapnp_reset_csns();
+	isapnp_reset_configuration();
 
 	next_csn = 1;
 	nDevices = 0;
@@ -212,7 +526,9 @@ void isapnp_detect(void)
 		{
 			isapnp_select_isolation();
 
-			if (!isapnp_read_id(&(devices[nDevices].pnp_vendor_id), &(devices[nDevices].pnp_sn)))
+			if (!isapnp_read_id(devices[nDevices].vendor_string,
+				&(devices[nDevices].product_id),
+				&(devices[nDevices].sn)))
 			{
 				break;
 			}
@@ -248,17 +564,32 @@ void isapnp_detect(void)
 
 		for (int i = 0; i < nDevices; i++)
 		{
-			terminal_writestring("ISAPNP: vendor id: 0x");
-			terminal_hex_dword(devices[i].pnp_vendor_id);
+			terminal_writestring("ISAPNP: vendor: ");
+			terminal_writestring(devices[i].vendor_string);
+			terminal_writestring(", product id: 0x");
+			terminal_hex_word(devices[i].product_id);
 			terminal_writestring(", sn: 0x");
-			terminal_hex_dword(devices[i].pnp_sn);
+			terminal_hex_dword(devices[i].sn);
 			terminal_writestring(", csn: ");
 			terminal_hex_byte(devices[i].csn);
 			terminal_writestring("h\n");
+
+			// Configure cards
+			if (isapnp_read_resource_data(devices[i].csn, 0))
+			{
+				terminal_writestring("ISAPNP: resource data read successfully!\n");
+			}
+			else
+			{
+				terminal_writestring("ISAPNP: reading resource data failed.\n");
+			}
 		}
 	}
 	else
 	{
 		terminal_writestring("ISAPNP: no card detected.\n");
 	}
+
+	// leave cards in Wait for Key state
+	isapnp_return_to_wait_for_key();
 }

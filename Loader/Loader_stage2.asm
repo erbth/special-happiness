@@ -546,18 +546,18 @@ entry_of_protected_mode:
 	mov esi, .p_msgKernelExecution
 	call p_print_string
 
-;	mov ecx, 5
-;
-;.wait_transfer:
-;	mov eax, ecx
-;	call p_print_hex
-;
-;	mov al, 0x0D
-;	call p_putchar
-;
-;	mov eax, 1000			; 1 second
-;	call sleep
-;	loop .wait_transfer, ecx
+	mov ecx, 5
+
+.wait_transfer:
+	mov eax, ecx
+	call p_print_hex
+
+	mov al, 0x0D
+	call p_putchar
+
+	mov eax, 1000			; 1 second
+	call sleep
+	loop .wait_transfer, ecx
 
 	mov al, 0FFh			; disable interrupts
 	out 0x21, al			; write to primary PIC
