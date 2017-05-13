@@ -1,10 +1,9 @@
 /* see http://wiki.osdev.org/Inline_Assembly/Examples#I.2FO_access */
+#include <stddef.h>
 #include <stdint.h>
 
 #ifndef _IO_H
 #define _IO_H
-
-#define NULL 0
 
 static inline void outb (uint16_t port, uint8_t val) {
 	asm volatile ( "outb %0, %1" : : "a"(val), "Nd"(port) );

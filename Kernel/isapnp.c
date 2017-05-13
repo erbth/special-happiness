@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "isapnp.h"
 #include "io.h"
+#include <string.h>
 
 #define ISAPNP_MAX_NUM_DEVICES 10
 
@@ -20,7 +21,15 @@ typedef struct _isapnp_resource_memory_range_32_bit isapnp_resource_memory_range
 typedef struct _isapnp_resource_io_port_range isapnp_resource_io_port_range;
 typedef struct _isapnp_resource_dma_mask isapnp_resource_dma_mask;
 typedef struct _isapnp_resource_irq_mask isapnp_resource_irq_mask;
+typedef struct _isapnp_device isapnp_device;
+typedef struct _isapnp_vendor_id_t isapnp_vendor_id_t;
 
+
+struct _isapnp_vendor_id_t
+{
+	char string[4];
+	uint16_t product_id;
+};
 
 struct _isapnp_resource_memory_range_8_16_bit
 {
@@ -63,7 +72,7 @@ struct _isapnp_resource_memory_range_32_bit
 
 struct _isapnp_resource_memory_range
 {
-	uint16_t configuration_port;  // location of the corresponding logical device configuration register
+	uint8_t configuration_register;  // location of the corresponding logical device configuration register
 
 	enum
 	{
@@ -79,10 +88,14 @@ struct _isapnp_resource_memory_range
 };
 struct _isapnp_resource_io_port_range
 {
-	uint16_t configuration_port;  // location of the corresponding logical device configuration register
+	struct
+	{
+		uint8_t fixed : 1;				// IO port range fixed?
+		uint8_t full_16_bit : 1;		// if1, the device uses the full 16 bit ISA address,
+										// if 0, only ISA address bits[9:0] are decoded.
+	} information;
 
-	uint8_t full_16_bit;			// if != 0, the device uses the full 16 bit ISA address,
-									// if 0, only ISA address bits[9:0] are decoded.
+	uint8_t configuration_register;  // location of the corresponding logical device configuration register
 
 	uint16_t minimum_base_address;
 	uint16_t maximum_base_address;
@@ -92,7 +105,7 @@ struct _isapnp_resource_io_port_range
 
 struct _isapnp_resource_dma_mask
 {
-	uint16_t configuration_port;  // location of the corresponding logical device configuration register
+	uint8_t configuration_register;  // location of the corresponding logical device configuration register
 
 	uint8_t mask;				// supported DMA channel bit mask, bit 0 is channel 0
 
@@ -108,7 +121,7 @@ struct _isapnp_resource_dma_mask
 
 struct _isapnp_resource_irq_mask
 {
-	uint16_t configuration_port;  // location of the corresponding logical device configuration register
+	uint8_t configuration_register;  // location of the corresponding logical device configuration register
 
 	uint16_t mask;				// supported IRQs, bit 0 represents IRQ0
 
@@ -118,11 +131,14 @@ struct _isapnp_resource_irq_mask
 		uint8_t high_true_level_sensitive : 1;
 		uint8_t low_true_edge_sensitive : 1;
 		uint8_t high_true_edge_sensitive : 1;	// default / must be supported for ISA compatibility
-	};
+	} information;
 };
 
 struct _isapnp_dependent_function_resource_data
 {
+	uint8_t n_memory_resources;
+	uint8_t n_io_port_ranges;
+
 	isapnp_resource_memory_range memory_range[4];
 	isapnp_resource_io_port_range io_port_range[8];
 	isapnp_resource_dma_mask dma_mask;
@@ -131,8 +147,16 @@ struct _isapnp_dependent_function_resource_data
 
 struct _isapnp_logical_device_resource_data
 {
+	isapnp_vendor_id_t logical_device_id;
+
+	uint8_t n_compatible_device_ids;
+	isapnp_vendor_id_t compatible_device_ids[10];
+
 	uint16_t flags;					// (Byte6 << 8) | Byte5
 	char identifier_string[256];	// first 255 characters of the logical device's ansi identifier string
+
+	uint8_t n_memory_resources;
+	uint8_t n_io_port_ranges;
 
 	isapnp_resource_memory_range memory_range[4];
 	isapnp_resource_io_port_range io_port_range[8];
@@ -154,14 +178,13 @@ struct _isapnp_card_resource_data
 									// not more than 4 logical devices supported
 };
 
-typedef struct
+struct _isapnp_device
 {
-	char vendor_string[4];
-	uint16_t product_id;
+	isapnp_vendor_id_t vendor_id;
 	uint32_t sn;
 	uint8_t csn;
 	isapnp_card_resource_data resource_data;
-} isapnp_device;
+};
 
 
 /**********
@@ -170,6 +193,8 @@ typedef struct
 static uint16_t isapnp_rpa;
 static uint8_t nDevices;
 static isapnp_device devices[ISAPNP_MAX_NUM_DEVICES];
+static uint8_t next_io_port_configuration_register;
+static uint8_t next_interrupt_configuration_register;
 
 
 void isapnp_delay(void)
@@ -291,13 +316,12 @@ void isapnp_set_csn(uint8_t csn)
 
 /* Function:   isapnp_read_id
  * Purpose:    to read a card's vendor id and serial number during serial isolation
- * Parameters: vendor_id: a pointer to a 32 bit unsigned integer receiving the
- *                        vendor id
+ * Parameters: vendor_id: a pointer to a isapnp_vendor_id_t
  *             sn:        a pointer to a 32 bit unsigned integer receiving the
  *                        serial number
  * Returns:    1 in case of success, 0 in case of failure or if no card has sent
  *             an id (possibly because no card is on the bus) */
-uint8_t isapnp_read_id(char *vendor_string, uint16_t *product_id, uint32_t *sn)
+uint8_t isapnp_read_id(isapnp_vendor_id_t *vendor_id, uint32_t *sn)
 {
 	uint16_t input;
 	int card_detected = 0;
@@ -350,12 +374,12 @@ uint8_t isapnp_read_id(char *vendor_string, uint16_t *product_id, uint32_t *sn)
 		return 0;
 	}
 
-	vendor_string[0] = ((id[0] >> 2) & 0x1F) + 'A' - 1;
-	vendor_string[1] = (((id[1] >> 5) & 0x07) | ((id[0] << 3) & 0x18)) + 'A' - 1;
-	vendor_string[2] = (id[1] & 0x1F) + 'A' - 1;
-	vendor_string[3] = 0;
+	vendor_id->string[0] = ((id[0] >> 2) & 0x1F) + 'A' - 1;
+	vendor_id->string[1] = (((id[1] >> 5) & 0x07) | ((id[0] << 3) & 0x18)) + 'A' - 1;
+	vendor_id->string[2] = (id[1] & 0x1F) + 'A' - 1;
+	vendor_id->string[3] = 0;
 
-	*product_id = id[2] << 8 | id[3];
+	vendor_id->product_id = id[2] << 8 | id[3];
 	*sn        = id[7] << 24 | id[6] << 16 | id[5] << 8 | id[4];
 	return 1;
 }
@@ -394,50 +418,233 @@ void isapnp_read_resource_pnp_version(isapnp_device *card, uint16_t *length)
 	}
 }
 
+void isapnp_read_resource_logical_device_identifier(isapnp_device *card, uint16_t *length)
+{
+	uint8_t dev_id;
+	uint8_t in[4];
+
+	if (card->resource_data.n_logical_devices < 4)
+	{
+		dev_id = card->resource_data.n_logical_devices++;
+
+		// reset next configuration register addresses
+		next_io_port_configuration_register = 0x60;
+		next_interrupt_configuration_register = 0x70;
+
+		for (int c_in = 0; c_in < 4 && *length > 0; (*length)--)
+		{
+			in[c_in++] = isapnp_read_resource_byte();
+		}
+
+		card->resource_data.logical_devices[dev_id].logical_device_id.string[0] = ((in[0] >> 2) & 0x1F) + 'A' - 1;
+		card->resource_data.logical_devices[dev_id].logical_device_id.string[1] = (((in[1] >> 5) & 0x07) | ((in[0] << 3) & 0x18)) + 'A' - 1;
+		card->resource_data.logical_devices[dev_id].logical_device_id.string[2] = (in[1] & 0x1F) + 'A' - 1;
+		card->resource_data.logical_devices[dev_id].logical_device_id.string[3] = 0;
+
+		card->resource_data.logical_devices[dev_id].logical_device_id.product_id = in[2] << 8 | in[3];
+
+		if (*length > 0)
+		{
+			card->resource_data.logical_devices[dev_id].flags = isapnp_read_resource_byte();
+			(*length)--;
+		}
+
+		if (*length > 0)
+		{
+			card->resource_data.logical_devices[dev_id].flags |= isapnp_read_resource_byte() << 8;
+			(*length)--;
+		}
+	}
+	else
+	{
+		terminal_writestring("ISAPNP: card ");
+		terminal_hex_byte(card->csn);
+		terminal_writestring("h: too many logical devices.\n");
+	}
+}
+
+void isapnp_read_resource_compatible_device_id(isapnp_device *card, uint16_t *length)
+{
+	if (card->resource_data.n_logical_devices > 0)
+	{
+		isapnp_logical_device_resource_data *dev =
+			&(card->resource_data.logical_devices[card->resource_data.n_logical_devices - 1]);
+
+		if (dev->n_compatible_device_ids < 10)
+		{
+			uint8_t in[4];
+
+			isapnp_vendor_id_t *c_id = &(dev->compatible_device_ids[dev->n_compatible_device_ids++]);
+
+			for (uint8_t i = 0; i < 4 && *length > 0; i++)
+			{
+				in[i] = isapnp_read_resource_byte();
+				(*length)--;
+			}
+
+			c_id->string[0] = ((in[0] >> 2) & 0x1F) + 'A' - 1;
+			c_id->string[1] = (((in[1] >> 5) & 0x07) | ((in[0] << 3) & 0x18)) + 'A' - 1;
+			c_id->string[2] = (in[1] & 0x1F) + 'A' - 1;
+			c_id->string[3] = 0;
+
+			c_id->product_id = in[2] << 8 | in[3];
+		}
+		else
+		{
+			terminal_writestring("ISAPNP: card ");
+			terminal_hex_byte(card->csn);
+			terminal_writestring("h: too many compatible device ids\n");
+		}
+	}
+	else
+	{
+		terminal_writestring("ISAPNP: card ");
+		terminal_hex_byte(card->csn);
+		terminal_writestring("h: unable to set compatible device id, no logical devices!\n");
+	}
+}
+
+void isapnp_read_resource_irq_mask(isapnp_device *card, uint16_t *length)
+{
+	if (card->resource_data.n_logical_devices > 0)
+	{
+		isapnp_resource_irq_mask *mask =
+			&(card->resource_data.logical_devices[card->resource_data.n_logical_devices - 1].irq_mask);
+
+		// assign configuration register address
+		mask->configuration_register = next_interrupt_configuration_register;
+		next_interrupt_configuration_register += 2;
+
+		if (*length > 2)
+		{
+			mask->mask = isapnp_read_resource_byte();
+			mask->mask |= isapnp_read_resource_byte() << 8;
+			*length -= 2;
+
+			if (*length > 0)
+			{
+				uint8_t info = isapnp_read_resource_byte();
+
+				(*length)--;
+
+				mask->information.low_true_level_sensitive = info & 0x08 ? 1 : 0;
+				mask->information.high_true_level_sensitive = info & 0x04 ? 1 : 0;
+				mask->information.low_true_edge_sensitive = info & 0x02 ? 1 : 0;
+				mask->information.high_true_edge_sensitive = info & 0x01 ? 1 : 0;
+			}
+			else
+			{
+				mask->information.low_true_level_sensitive = 0;
+				mask->information.high_true_level_sensitive = 0;
+				mask->information.low_true_edge_sensitive = 0;
+				mask->information.high_true_edge_sensitive = 1;
+			}
+		}
+	}
+	else
+	{
+		terminal_writestring("ISAPNP: card ");
+		terminal_hex_byte(card->csn);
+		terminal_writestring("h: store IRQ mask: no logical devices!\n");
+	}
+}
+
+void isapnp_read_resource_io_port_descriptor(isapnp_device *card, uint16_t *length)
+{
+	if (card->resource_data.n_logical_devices > 0)
+	{
+		isapnp_logical_device_resource_data *dev =
+			&(card->resource_data.logical_devices[card->resource_data.n_logical_devices - 1]);
+
+		if (dev->n_io_port_ranges < 8)
+		{
+			isapnp_resource_io_port_range *range =
+				&(dev->io_port_range[dev->n_io_port_ranges++]);
+
+			// not a fixed descriptor
+			range->information.fixed = 0;
+
+			// assign configuration register location
+			range->configuration_register = next_io_port_configuration_register;
+			next_io_port_configuration_register += 2;
+
+			// check length once
+			if (*length < 7)
+			{
+				return;
+			}
+
+			range->information.full_16_bit =
+				(isapnp_read_resource_byte() & 0x01) ? 1 : 0;
+
+			range->minimum_base_address = isapnp_read_resource_byte();
+			range->minimum_base_address |= isapnp_read_resource_byte() << 8;
+			range->maximum_base_address = isapnp_read_resource_byte();
+			range->maximum_base_address |= isapnp_read_resource_byte() << 8;
+			range->base_alignment = isapnp_read_resource_byte();
+			range->number_of_ports = isapnp_read_resource_byte();
+
+			*length -= 7;
+		}
+		else
+		{
+			terminal_writestring("ISAPNP: card ");
+			terminal_hex_byte(card->csn);
+			terminal_writestring("h: too many io port ranges\n");
+		}
+	}
+	else
+	{
+		terminal_writestring("ISAPNP: card ");
+		terminal_hex_byte(card->csn);
+		terminal_writestring("h: store io port range: no logical devices!\n");
+	}
+}
+
 void isapnp_read_resource_ansi_string(isapnp_device *card, uint16_t *length)
 {
 	int pos = 0;
+	char *id_string;
+
+	if (card->resource_data.n_logical_devices <= 0)
+	{
+		id_string = card->resource_data.identifier_string;
+	}
+	else
+	{
+		id_string = card->resource_data.logical_devices[card->resource_data.n_logical_devices - 1].identifier_string;
+	}
 
 	while ((pos < 255) && (*length > 0))
 	{
-		card->resource_data.identifier_string[pos++] = isapnp_read_resource_byte();
+		id_string[pos++] = isapnp_read_resource_byte();
 		(*length)--;
 	}
 
-	card->resource_data.identifier_string[pos] = 0;
+	id_string[pos] = 0;
 }
 
 /* Function:   isapnp_read_resource_data
  * Purpose:    to read a card's reasource data
- * Parameters: csn:     the card's CSN,
- *             id_read: if != 0, the 72 bit card id has already been read,
+ * Parameters: card:    a pointer to an isapnp_device,
+ *             id_read: if != 0, the 72 bit card in has already been read,
  *                      if 0, it has not
  * Returns:    0 in case of failure, 1 otherwise */
-uint8_t isapnp_read_resource_data(uint8_t csn, uint8_t id_read)
+uint8_t isapnp_read_resource_data(isapnp_device *card, uint8_t id_read)
 {
 	uint8_t input;
 	uint8_t end_reached = 0;
-	isapnp_device *card = NULL;
-
-	// find card
-	for (int i = 0; i < nDevices; i++)
-	{
-		if (devices[i].csn == csn)
-		{
-			card = &(devices[i]);
-		}
-	}
 
 	if (card == NULL)
 	{
-		terminal_writestring("ISAPNP: error: CSN ");
-		terminal_hex_byte(csn);
-		terminal_writestring("h not found.");
 		return 0;
 	}
 
+	// initialize certain variables
+	card->resource_data.n_logical_devices = 0;
+
 	// wake card and put others to sleep
-	isapnp_wake(csn);
+	isapnp_wake(card->csn);
 
 	if (id_read == 0)
 	{
@@ -470,10 +677,34 @@ uint8_t isapnp_read_resource_data(uint8_t csn, uint8_t id_read)
 			length = input & 0x07;
 		}
 
-		switch (input)
+		switch (resource_id)
 		{
 		case 0x01:
 			isapnp_read_resource_pnp_version(card, &length);
+			break;
+
+		case 0x02:
+			if (card->resource_data.n_logical_devices >= 4)
+			{
+				terminal_writestring("ISAPNP: card ");
+				terminal_hex_byte(card->csn);
+				terminal_writestring("h: too many logical devices\n");
+				return 0;
+			}
+
+			isapnp_read_resource_logical_device_identifier(card, &length);
+			break;
+
+		case 0x03:
+			isapnp_read_resource_compatible_device_id(card, &length);
+			break;
+
+		case 0x04:
+			isapnp_read_resource_irq_mask(card, &length);
+			break;
+
+		case 0x08:
+			isapnp_read_resource_io_port_descriptor(card, &length);
 			break;
 
 		case 0x82:
@@ -482,7 +713,7 @@ uint8_t isapnp_read_resource_data(uint8_t csn, uint8_t id_read)
 
 		default:
 			terminal_writestring("ISAPNP: card ");
-			terminal_hex_byte(csn);
+			terminal_hex_byte(card->csn);
 			terminal_writestring(": unknown resource id: 0x");
 			terminal_hex_byte(resource_id);
 			terminal_putchar('\n');
@@ -492,9 +723,9 @@ uint8_t isapnp_read_resource_data(uint8_t csn, uint8_t id_read)
 		if (length != 0)
 		{
 			terminal_writestring("ISAPNP: card ");
-			terminal_hex_byte(csn);
-			terminal_writestring(": resource id: 0x");
-			terminal_hex_byte(input);
+			terminal_hex_byte(card->csn);
+			terminal_writestring("h: resource id: 0x");
+			terminal_hex_byte(resource_id);
 			terminal_writestring(": length (");
 			terminal_hex_word(length);
 			terminal_writestring("h) != 0\n");
@@ -505,17 +736,126 @@ uint8_t isapnp_read_resource_data(uint8_t csn, uint8_t id_read)
 	return 1;
 }
 
+/* Function:   isapnp_print_resource_data
+ * Purpose:    to print the read resource data of a specific card on the terminal
+ * Parameters: card: a pointer to an isapnp_device */
+void isapnp_print_resource_data(isapnp_device *card)
+{
+	if (card)
+	{
+		isapnp_card_resource_data *res_data = &(card->resource_data);
+
+		terminal_writestring("ISAPNP: pnp version number: ");
+		terminal_hex_byte(res_data->pnp_version_number);
+
+		terminal_writestring("h\n"
+							 "ISAPNP: identifier string:  ");
+		terminal_writestring(res_data->identifier_string);
+
+		for (int i = 0; i < res_data->n_logical_devices; i++)
+		{
+			isapnp_logical_device_resource_data *dev = &(res_data->logical_devices[i]);
+
+			terminal_writestring("\nISAPNP: logical device #");
+			terminal_hex_byte(i);
+
+			terminal_writestring("h\n"
+								 "ISAPNP:   vendor string:      ");
+			terminal_writestring(dev->logical_device_id.string);
+			terminal_writestring(", product identifier: 0x");
+			terminal_hex_word(dev->logical_device_id.product_id);
+
+			for (int j = 0; j < dev->n_compatible_device_ids; j++)
+			{
+				terminal_writestring("h\n"
+									 "ISAPNP:   compatible vendor string: ");
+				terminal_writestring(dev->compatible_device_ids[j].string);
+				terminal_writestring(", product identifier: 0x");
+				terminal_hex_word(dev->compatible_device_ids[j].product_id);
+			}
+
+			if (dev->identifier_string[0] != 0)
+			{
+				terminal_writestring("\n"
+									 "ISAPNP:   identifier string:  ");
+				terminal_writestring(dev->identifier_string);
+			}
+
+			for (int j = 0; j < dev->n_io_port_ranges; j++)
+			{
+				isapnp_resource_io_port_range *range = &(dev->io_port_range[j]);
+
+				terminal_writestring("\n"
+					"ISAPNP:   io port range: 0x");
+				terminal_hex_word(range->minimum_base_address);
+				terminal_writestring("-0x");
+				terminal_hex_word(range->maximum_base_address);
+				terminal_writestring(" (#=");
+				terminal_hex_byte(range->number_of_ports);
+				terminal_writestring("h, aligned to ");
+				terminal_hex_byte(range->base_alignment);
+				terminal_writestring("h, config: 0x");
+				terminal_hex_byte(range->configuration_register);
+				terminal_putchar(')');
+
+				if (range->information.fixed)
+				{
+					terminal_writestring(" fixed");
+				}
+
+				if (range->information.full_16_bit)
+				{
+					terminal_writestring(" full-16-bit");
+				}
+			}
+
+			/* IRQ mask */
+			terminal_writestring("\n"
+								 "ISAPNP:   IRQ mask:           0x");
+			terminal_hex_word(dev->irq_mask.mask);
+
+			if (dev->irq_mask.information.low_true_level_sensitive ||
+				dev->irq_mask.information.low_true_edge_sensitive)
+			{
+				terminal_writestring(" low true");
+			}
+			else
+			{
+				terminal_writestring(" high true");
+			}
+
+			if (dev->irq_mask.information.low_true_level_sensitive ||
+				dev->irq_mask.information.high_true_level_sensitive)
+			{
+				terminal_writestring(" level sensitive");
+			}
+			else
+			{
+				terminal_writestring(" edge sensitive");
+			}
+
+			terminal_writestring(" (config: 0x)");
+			terminal_hex_byte(dev->irq_mask.configuration_register);
+		}
+
+		terminal_putchar('\n');
+	}
+}
+
 
 void isapnp_detect(void)
 {
 	uint8_t next_csn;
+
+	// initialize global card table
+	nDevices = 0;
+	memset(devices, 0, sizeof(devices));
 
 	isapnp_send_initiation_key();	// cards have to be resetted before read port change
 	isapnp_reset_csns();
 	isapnp_reset_configuration();
 
 	next_csn = 1;
-	nDevices = 0;
 
 	for (isapnp_rpa = 0x203; nDevices == 0 && isapnp_rpa <= 0x3FF;)
 	{
@@ -526,8 +866,7 @@ void isapnp_detect(void)
 		{
 			isapnp_select_isolation();
 
-			if (!isapnp_read_id(devices[nDevices].vendor_string,
-				&(devices[nDevices].product_id),
+			if (!isapnp_read_id(&(devices[nDevices].vendor_id),
 				&(devices[nDevices].sn)))
 			{
 				break;
@@ -565,9 +904,9 @@ void isapnp_detect(void)
 		for (int i = 0; i < nDevices; i++)
 		{
 			terminal_writestring("ISAPNP: vendor: ");
-			terminal_writestring(devices[i].vendor_string);
+			terminal_writestring(devices[i].vendor_id.string);
 			terminal_writestring(", product id: 0x");
-			terminal_hex_word(devices[i].product_id);
+			terminal_hex_word(devices[i].vendor_id.product_id);
 			terminal_writestring(", sn: 0x");
 			terminal_hex_dword(devices[i].sn);
 			terminal_writestring(", csn: ");
@@ -575,14 +914,12 @@ void isapnp_detect(void)
 			terminal_writestring("h\n");
 
 			// Configure cards
-			if (isapnp_read_resource_data(devices[i].csn, 0))
-			{
-				terminal_writestring("ISAPNP: resource data read successfully!\n");
-			}
-			else
+			if (!isapnp_read_resource_data(&(devices[i]), 0))
 			{
 				terminal_writestring("ISAPNP: reading resource data failed.\n");
 			}
+
+			isapnp_print_resource_data(&(devices[i]));
 		}
 	}
 	else

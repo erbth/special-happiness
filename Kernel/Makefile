@@ -1,5 +1,5 @@
 NFLAGS:=-f elf
-CFLAGS:=-ffreestanding -O2 -Wall -Wextra -Werror -std=gnu99 -fno-asynchronous-unwind-tables
+CFLAGS:=-ffreestanding -O2 -Wall -Wextra -Werror -std=gnu99 -fno-asynchronous-unwind-tables -Iinclude
 OBJ_BASE:=../$(OBJ_BASE)
 OBJ_DIR=$(OBJ_BASE)/$(MODULE)
 
@@ -11,6 +11,7 @@ TARGET=Kernel.bin
 # Order matters!
 OBJS= Entry.o \
 	  kernel.o \
+	  string.o \
 	  isapnp.o \
       Text.o
 
