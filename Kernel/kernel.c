@@ -155,5 +155,12 @@ void kernel_main (void) {
 	// terminal_writestring (text);
 
 	/* PnP detect cards */
-	isapnp_detect();
+	if (isapnp_detect_configure())
+	{
+		terminal_writestring("ISA PNP cards detected successfully.\n");
+	}
+	else
+	{
+		terminal_writestring("ISA PNP card detection failed.\n");
+	}
 }

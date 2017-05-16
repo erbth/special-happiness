@@ -195,6 +195,7 @@ static uint8_t nDevices;
 static isapnp_device devices[ISAPNP_MAX_NUM_DEVICES];
 static uint8_t next_io_port_configuration_register;
 static uint8_t next_interrupt_configuration_register;
+static uint8_t resource_data_sum;
 
 
 void isapnp_delay(void)
@@ -399,6 +400,10 @@ static inline uint8_t isapnp_read_resource_byte()
 
 	outb(ISAPNP_ADDRESS, 0x04);
 	input = inb(isapnp_rpa);				// read resource data
+
+	resource_data_sum += input;				// add to sum of all bytes for
+											// checksum verification
+
 	return input;
 }
 
@@ -601,6 +606,35 @@ void isapnp_read_resource_io_port_descriptor(isapnp_device *card, uint16_t *leng
 	}
 }
 
+/* returns:    1 if the checksum matches, 0 otherwise */
+uint8_t isapnp_read_resource_end_tag(isapnp_device *card, uint16_t *length)
+{
+	if (*length >= 1)
+	{
+		uint8_t prev_sum = resource_data_sum;
+		uint8_t checksum = isapnp_read_resource_byte();
+
+		(*length)--;
+
+		if (checksum == 0 || resource_data_sum == 0)
+		{
+			return 1;
+		}
+		else
+		{
+			terminal_writestring("ISAPNP: card ");
+			terminal_hex_byte(card->csn);
+			terminal_writestring("h: checksum mismatch: 0x");
+			terminal_hex_byte(checksum);
+			terminal_writestring(" (checksum) != 0x");
+			terminal_hex_byte(prev_sum);
+			terminal_writestring(" (sum of received bytes)\n");
+		}
+	}
+
+	return 0;
+}
+
 void isapnp_read_resource_ansi_string(isapnp_device *card, uint16_t *length)
 {
 	int pos = 0;
@@ -641,7 +675,7 @@ uint8_t isapnp_read_resource_data(isapnp_device *card, uint8_t id_read)
 	}
 
 	// initialize certain variables
-	card->resource_data.n_logical_devices = 0;
+	card->resource_data.n_logical_devices = 0;  // actually not required because of memset ...
 
 	// wake card and put others to sleep
 	isapnp_wake(card->csn);
@@ -654,6 +688,10 @@ uint8_t isapnp_read_resource_data(isapnp_device *card, uint8_t id_read)
 			isapnp_read_resource_byte();
 		}
 	}
+
+	// The checksum covers all data after the serial identifier, thus reset the
+	// computed sum here
+	resource_data_sum = 0;
 
 	do
 	{
@@ -705,6 +743,13 @@ uint8_t isapnp_read_resource_data(isapnp_device *card, uint8_t id_read)
 
 		case 0x08:
 			isapnp_read_resource_io_port_descriptor(card, &length);
+			break;
+
+		case 0x0F:
+			if (isapnp_read_resource_end_tag(card, &length))
+			{
+				end_reached = 1;
+			}
 			break;
 
 		case 0x82:
@@ -834,8 +879,9 @@ void isapnp_print_resource_data(isapnp_device *card)
 				terminal_writestring(" edge sensitive");
 			}
 
-			terminal_writestring(" (config: 0x)");
+			terminal_writestring(" (config: 0x");
 			terminal_hex_byte(dev->irq_mask.configuration_register);
+			terminal_putchar(')');
 		}
 
 		terminal_putchar('\n');
@@ -843,7 +889,11 @@ void isapnp_print_resource_data(isapnp_device *card)
 }
 
 
-void isapnp_detect(void)
+/* Function:   isapnp_detect_configure
+ * Purpose:    to detect and configure ISA PNP cards
+ * Parameters: none
+ * Returns:    0 in case of failure, 1 in case of success */
+uint8_t isapnp_detect_configure(void)
 {
 	uint8_t next_csn;
 
@@ -917,6 +967,7 @@ void isapnp_detect(void)
 			if (!isapnp_read_resource_data(&(devices[i]), 0))
 			{
 				terminal_writestring("ISAPNP: reading resource data failed.\n");
+				return 0;
 			}
 
 			isapnp_print_resource_data(&(devices[i]));
@@ -929,4 +980,5 @@ void isapnp_detect(void)
 
 	// leave cards in Wait for Key state
 	isapnp_return_to_wait_for_key();
+	return 1;
 }

@@ -6,7 +6,7 @@ typedef struct _isapnp_device isapnp_device;
 typedef struct _isapnp_vendor_id_t isapnp_vendor_id_t;
 
 /* function prototypes */
-void isapnp_detect(void);
+uint8_t isapnp_detect_configure(void);
 
 void isapnp_send_initiaition_key(void);
 void isapnp_reset(void);
