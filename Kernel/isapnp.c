@@ -6,12 +6,14 @@
 #include "isapnp.h"
 #include "io.h"
 #include <string.h>
+#include <util.h>
 
 #define ISAPNP_MAX_NUM_DEVICES 10
 
 #define ISAPNP_ADDRESS 0x279
 #define ISAPNP_WRITE   0xA79
 
+// typedefs
 typedef struct _isapnp_card_resource_data isapnp_card_resource_data;
 typedef struct _isapnp_logical_device_resource_data isapnp_logical_device_resource_data;
 typedef struct _isapnp_dependent_function_resource_data isapnp_dependent_function_resource_data;
@@ -24,7 +26,15 @@ typedef struct _isapnp_resource_irq_mask isapnp_resource_irq_mask;
 typedef struct _isapnp_device isapnp_device;
 typedef struct _isapnp_vendor_id_t isapnp_vendor_id_t;
 
+// prototypes
+void isapnp_select_card(isapnp_device *card);
+void isapnp_select_logical_device(uint8_t id);
+void isapnp_activate_logical_device(void);
+uint8_t isapnp_check_io_port_range_naive(uint16_t base, uint16_t n_ports);
+uint8_t isapnp_configure_io_port_range(isapnp_resource_io_port_range *range);
+uint8_t isapnp_configure_irq(isapnp_resource_irq_mask *irq_mask);
 
+// structs
 struct _isapnp_vendor_id_t
 {
 	char string[4];
@@ -86,6 +96,7 @@ struct _isapnp_resource_memory_range
 		isapnp_resource_memory_range_32_bit _32_bit;
 	} u;
 };
+
 struct _isapnp_resource_io_port_range
 {
 	struct
@@ -889,6 +900,204 @@ void isapnp_print_resource_data(isapnp_device *card)
 }
 
 
+/* Function:   isapnp_select_card
+ * Purpose:    to put a specific card into the configure state
+ * Parameters: card [IN]: a pointer to the specific card's isapnp_device */
+void isapnp_select_card(isapnp_device *card)
+{
+	isapnp_wake(card->csn);
+}
+
+/* Function:   isapnp_select_logical_device
+ * Purpose:    to select a logical device on the card which is currently in
+ *             configure state
+ * Parameters: id [IN]: the logical device's id */
+void isapnp_select_logical_device(uint8_t id)
+{
+	outb(ISAPNP_ADDRESS, 0x07);		// logical device number register
+	outb(ISAPNP_WRITE, id);
+}
+
+/* Function:   isapnp_activate_logical_device
+ * Purpose:    to activate the currently selected device of the card which is
+ *             currently in configure state for the ISA bus. This will disable
+ *             I/O range check on the particular card.
+ * Parameters: none */
+void isapnp_activate_logical_device(void)
+{
+	outb(ISAPNP_ADDRESS, 0x31);		// I/O Range Check register
+	outb(ISAPNP_WRITE, 0);			// disable I/O range check
+
+	outb(ISAPNP_ADDRESS, 0x30);		// Activate register
+	outb(ISAPNP_WRITE, 0x01);		// activate device
+}
+
+/* Function:   isapnp_check_io_port_range_naive
+ * Purpose:    to check whether an io port range is free in a naive way
+ *             without using an ISA PNP logical device's I/O range check
+ *             function (to avoid obvious conflicts).
+ * Parameters: base [IN]:    base I/O port
+ *             n_ports [IN]: count of ports in the range to check
+ * Returns:    1 if the I/O port range seems free, 0 otherwise */
+uint8_t isapnp_check_io_port_range_naive(uint16_t base, uint16_t n_ports)
+{
+	for (uint16_t port = base; port < (base + n_ports); port++)
+	{
+		for (int i = 0; i < 10; i++)
+		{
+			// "quick and dirty"
+			if (inb(port) != 0xFF)
+			{
+				return 0;
+			}
+		}
+	}
+
+	// the otherway round ...
+	for (int i = 0; i < 10; i++)
+	{
+		for (uint16_t port = base; port < (base + n_ports); port++)
+		{
+			// "quick and dirty"
+			if (inb(port) != 0xFF)
+			{
+				return 0;
+			}
+		}
+	}
+
+	return 1;
+}
+
+/* Function:   isapnp_configure_io_port_range
+ * Purpose:    to configure one of the currently selected logical device's io port
+ *             ranges to free ports
+ * Parameters: range [IN]: a pointer to an isapnp_resource_io_port_range
+ * Returns:    1 on success, 0 on failure */
+uint8_t isapnp_configure_io_port_range(isapnp_resource_io_port_range *range)
+{
+	uint16_t base_port;
+
+	// it might be a good idea to start above 0x279 ...
+	// (see http://wiki.osdev.org/Ne2000#Ne2000_Registers)
+	base_port = MAX(0x280, range->minimum_base_address);
+
+	// enforce alignment
+	if ((base_port % range->base_alignment) != 0)
+	{
+		base_port += range->base_alignment - (base_port % range->base_alignment);
+	}
+
+	// currently, configure only to port 0x280
+	for (; base_port <= 0x280 /* range->maximum_base_address */; base_port += range->base_alignment)
+	{
+		terminal_hex_word(base_port);
+		terminal_putchar('\n');
+
+		if (isapnp_check_io_port_range_naive(base_port, range->number_of_ports))
+		{
+			// configure high byte
+			outb(ISAPNP_ADDRESS, range->configuration_register);
+			outb(ISAPNP_WRITE, (base_port >> 8) & 0xFF);
+
+			// configure low byte
+			outb(ISAPNP_ADDRESS, range->configuration_register + 1);
+			outb(ISAPNP_WRITE, base_port & 0xFF);
+
+			terminal_writestring("ISAPNP: configured I/O port range to 0x");
+			terminal_hex_word(base_port);
+			terminal_writestring(" (");
+			terminal_hex_byte(range->number_of_ports);
+			terminal_writestring("h ports)\n");
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/* Function:   isapnp_configure_irq
+ * Purpose:    to configure one of the currently selected logical device's IRQ
+ *             to a free IRQ
+ * Parameters: irq_mask [IN]: a pointer to an isapnp_resource_irq_mask
+ * Returns:    1 on success, 0 on failure */
+ uint8_t isapnp_configure_irq(isapnp_resource_irq_mask *irq_mask)
+ {
+	 // currently, this is implemented trivially, it configures any irq to irq 5
+	 // or returns with failure if irq 5 is not supported.
+
+	 if (irq_mask->mask & (1 << 5))
+	 {
+		 if (irq_mask->information.high_true_edge_sensitive)
+		 {
+			 // interrupt level
+			 outb(ISAPNP_ADDRESS, irq_mask->configuration_register);
+			 outb(ISAPNP_WRITE, 5);
+
+			 // type
+			 outb(ISAPNP_ADDRESS, irq_mask->configuration_register + 1);
+			 outb(ISAPNP_WRITE, 0b10);		// high true, edge sensitive
+
+			 terminal_writestring("ISAPNP: configured IRQ 5\n");
+		 }
+		 else
+		 {
+			 terminal_writestring("ISAPNP: configure IRQ: high true/edge sensitive not supported\n");
+			 return 0;
+		 }
+	 }
+	 else
+	 {
+		 terminal_writestring("ISAPNP: configure IRQ: IRQ 5 not supported\n");
+		 return 0;
+	 }
+
+	 return 1;
+ }
+
+
+uint8_t isapnp_configure_ne2000(isapnp_device *card, uint8_t logical_device_id)
+{
+	isapnp_logical_device_resource_data *dev;
+
+	if (!card || logical_device_id >= card->resource_data.n_logical_devices)
+	{
+		return 0;
+	}
+
+	dev = &(card->resource_data.logical_devices[logical_device_id]);
+
+	isapnp_select_card(card);
+	isapnp_select_logical_device(logical_device_id);
+
+	if (dev->n_io_port_ranges > 0)
+	{
+		if (!isapnp_configure_io_port_range(&(dev->io_port_range[0])))
+		{
+			terminal_writestring("ISAPNP: NE2000 ");
+			terminal_hex_byte(card->csn);
+			terminal_writestring("h: configuring io port range failed\n");
+			return 0;
+		}
+	}
+
+	if (!isapnp_configure_irq(&(dev->irq_mask)))
+	{
+		terminal_writestring("ISAPNP: NE2000 ");
+		terminal_hex_byte(card->csn);
+		terminal_writestring("h: configuring irq failed\n");
+		return 0;
+	}
+
+	terminal_writestring("ISAPNP: NE2000 with CSN ");
+	terminal_hex_byte(card->csn);
+	terminal_writestring("h/logical device id ");
+	terminal_hex_byte(logical_device_id);
+	terminal_writestring("h configured.\n");
+
+	return 1;
+}
+
 /* Function:   isapnp_detect_configure
  * Purpose:    to detect and configure ISA PNP cards
  * Parameters: none
@@ -971,6 +1180,37 @@ uint8_t isapnp_detect_configure(void)
 			}
 
 			isapnp_print_resource_data(&(devices[i]));
+
+			for (int j = 0; j < devices[i].resource_data.n_logical_devices; j++)
+			{
+				isapnp_logical_device_resource_data *dev =
+					&(devices[i].resource_data.logical_devices[j]);
+
+				// If it is a NE2000, configure it (roudimentary)
+				if (memcmp(dev->logical_device_id.string, "PNP", 3) == 0 &&
+					dev->logical_device_id.product_id == 0x80d6)
+				{
+					if (!isapnp_configure_ne2000(&(devices[i]), j))
+					{
+						return 0;
+					}
+				}
+				else
+				{
+					for (int k = 0; k < dev->n_compatible_device_ids; k++)
+					{
+						if (memcmp(dev->compatible_device_ids[k].string, "PNP", 3) == 0 &&
+							dev->compatible_device_ids[k].product_id == 0x80d6)
+						{
+							if (!isapnp_configure_ne2000(&(devices[i]), j))
+							{
+								return 0;
+							}
+							break;
+						}
+					}
+				}
+			}
 		}
 	}
 	else

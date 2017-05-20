@@ -19,7 +19,7 @@ uint8_t isapnp_read_id(isapnp_vendor_id_t *vendor_id, uint32_t *sn);
 uint8_t isapnp_read_resource_data(isapnp_device *card, uint8_t id_read);
 void isapnp_print_resource_data(isapnp_device *card);
 
- void isapnp_lfsr_shift(uint8_t *byte, uint8_t input);
- void isapnp_delay(void);
+void isapnp_lfsr_shift(uint8_t *byte, uint8_t input);
+void isapnp_delay(void);
 
 #endif /* _ISA_PNP_H */
