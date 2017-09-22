@@ -1089,6 +1089,8 @@ uint8_t isapnp_configure_ne2000(isapnp_device *card, uint8_t logical_device_id)
 		return 0;
 	}
 
+	isapnp_activate_logical_device();
+
 	terminal_writestring("ISAPNP: NE2000 with CSN ");
 	terminal_hex_byte(card->csn);
 	terminal_writestring("h/logical device id ");

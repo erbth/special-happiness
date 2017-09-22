@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "isapnp.h"
+#include "NE2000.h"
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -163,4 +164,7 @@ void kernel_main (void) {
 	{
 		terminal_writestring("ISA PNP card detection failed.\n");
 	}
+
+	/* have fun */
+	NE2000_initialize();
 }

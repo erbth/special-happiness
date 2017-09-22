@@ -47,3 +47,22 @@ int memcmp(const void *s1, const void *s2, size_t n)
 		return s1 == NULL ? (s2 == NULL ? 0 : -1) : 1;
 	}
 }
+
+
+/* Function:   strcpy
+ * Purpose:    to copy zero terminated strings like traditional strcpy
+ * Parameters: dest [OUT]: destinaiton buffer
+ *             src [IN]:   source buffer
+ * Returns:    a pointer to the destination string dest */
+char * strcpy(char *dest, const char *src)
+{
+	if (dest != NULL && src != NULL)
+	{
+		while (*src != 0)
+		{
+			*dest++ = *src++;
+		}
+	}
+
+	return dest;
+}

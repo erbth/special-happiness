@@ -13,6 +13,7 @@ OBJS= Entry.o \
 	  kernel.o \
 	  string.o \
 	  isapnp.o \
+	  NE2000.o \
       Text.o
 
 .PHONY: all

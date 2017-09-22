@@ -8,6 +8,14 @@ entry:
 	or ax, ax
 	jnz .a20_error
 
+	; Retrieve memory map using int 15h with ax=e820h
+	call retrieve_memory_map_int15
+
+	; End execution here for now
+.end:
+	hlt
+	jmp .end
+
 	; create and load gdt
 	call create_GDT
 
@@ -400,13 +408,32 @@ print_string:
 .done:
 	ret
 
+; AL [IN] = character to print, fully state preserving
+print_char:
+	push ax
+	push bx
+
+	mov ah, 0x0E
+	xor bx, bx		; fg pixel color may go in bl ??
+	int 10h
+
+	pop bx
+	pop ax
+	ret
+
 ; basically from there: http://wiki.osdev.org/Real_mode_assembly_II,
 ; extended to whole ax
 print_hex:
+	push ax
+	push bx
+
 	call .byte
 	mov ax, [.temp]
 	xchg al, ah
 	call .byte
+
+	pop bx
+	pop ax
 	ret
 .byte:
 	mov [.temp],ax
@@ -431,6 +458,139 @@ print_hex:
 	ret
 
 .temp dw 0
+
+; Print entire eax
+print_hex_dword:
+	rol eax, 16
+	call print_hex
+
+	rol eax, 16
+	call print_hex
+	ret
+
+
+; Function:   retrieve_memory_map_int15
+; Purpose:    to query the memory map from the BIOS using int 15h with ax=e820h.
+;             Self evidently in a fully CPU state preserving way.
+; Parameters: none
+retrieve_memory_map_int15:
+	push eax
+	push ebx
+	push ecx
+	push edx
+	push si
+	push di
+	push es
+
+	; print message
+	mov si, .msgMemMap
+	call print_string
+
+	; Initialize Continuation
+	xor ebx, ebx
+
+.query_loop:
+	; setup ES
+	mov ax, 0
+	mov es, ax
+
+	; system call
+	mov eax, 0e820h
+	mov di, .descriptor
+	mov ecx, 20
+	mov edx, 'PAMS'		; respect little endian
+
+	int 15h
+
+	; evaluate result
+	jnc .no_error
+
+	; possible error, but the last valid descriptor might be indicated with
+	; carry
+	test byte [.first], 0
+	je .error
+
+	; consolidate last valid descriptor indication
+	xor ebx, ebx
+
+.no_error:
+	; indicate success
+	mov byte [.first], 1
+	
+	; print descriptor
+	mov si, .msgDescriptorBase
+	call print_string
+
+	mov eax, [.descriptor + 4]
+	call print_hex_dword
+	mov eax, [.descriptor]
+	call print_hex_dword
+
+	mov si, .msgDescriptorLength
+	call print_string
+
+	mov eax, [.descriptor + 12]
+	call print_hex_dword
+	mov eax, [.descriptor + 8]
+	call print_hex_dword
+
+	mov si, .msgDescriptorLengthEnd
+	call print_string
+
+	mov eax, [.descriptor + 16]
+
+	cmp eax, 1
+	je .arm
+
+	cmp eax, 2
+	je .arr
+
+	mov si, .msgDescriptorUndefined
+	jmp .print_type
+
+.arm:
+	mov si, .msgDescriptorARM
+	jmp .print_type
+
+.arr:
+	mov si, .msgDescriptorARR
+
+.print_type:
+	call print_string
+
+	cmp ebx, 0
+	jne .query_loop
+
+	mov si, .msgOk
+	call print_string
+
+.end:
+	pop es
+	pop di
+	pop si
+	pop edx
+	pop ecx
+	pop ebx
+	pop eax
+	ret
+
+.error:
+	mov si, .msgError
+	call print_string
+	jmp .end
+
+.first db 0
+
+.descriptor times 20 db 0
+.msgMemMap db 'Retrieving memory map ', 0
+.msgError db ' [failed]', 0dh, 0ah, 0
+.msgOk db ' [OK]', 0dh, 0ah, 0
+.msgDescriptorBase db 0dh, 0ah, 'Base: 0x', 0
+.msgDescriptorLength db ', Length: ', 0
+.msgDescriptorLengthEnd db 'h, ', 0
+.msgDescriptorARM db 'AddressRangeMemory', 0
+.msgDescriptorARR db 'AddressRangeReserved', 0
+.msgDescriptorUndefined db 'undefined', 0
 
 
 ; ====================================
