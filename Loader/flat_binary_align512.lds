@@ -13,5 +13,9 @@ SECTIONS
         . = ALIGN(0x200);  /* align to full block */
     }
 
+    .bss (NOLOAD) : {
+        *(.bss)
+    }
+
     text_size = SIZEOF (.text); /* size of entire .text section as absolute symbol */
 }

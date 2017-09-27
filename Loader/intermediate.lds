@@ -5,8 +5,12 @@ OUTPUT_ARCH(i386)      /* Is this a good idea? What about emulation? */
 
 SECTIONS
 {
-	. = 0;	
+	. = 0;
 	.text : {
 		*(.text)
+	}
+
+	.bss (NOLOAD) : {
+		*(.bss)
 	}
 }

@@ -11,7 +11,7 @@ export SUDO=sudo
 
 export FD=/dev/fd0
 
-SUBDIRS_COMPONENTS=Loader Kernel
+SUBDIRS_COMPONENTS=Loader #Kernel
 SUBDIR_IMAGE=Image
 
 SUBDIRS=$(SUBDIRS_COMPONENTS) $(SUBDIR_IMAGE)

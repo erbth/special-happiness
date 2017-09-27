@@ -1,3 +1,7 @@
+%include "CommonConstants.inc"
+%include "Loader_EarlyDynamicMemory16.inc"
+%include "Loader_SystemMemoryMap16.inc"
+
 section .text
 ; org 0x7E00  ; done by linker
 bits 16
@@ -8,8 +12,18 @@ entry:
 	or ax, ax
 	jnz .a20_error
 
+	; Initialize early dynamically allocatable memory
+	call EarlyDynamicMemory_init
+
+	; Initialize System Memory Map
+	call SystemMemoryMap_init
+
 	; Retrieve memory map using int 15h with ax=e820h
 	call retrieve_memory_map_int15
+	call SystemMemoryMap_print
+
+	call SystemMemoryMap_sort
+	call SystemMemoryMap_print
 
 	; End execution here for now
 .end:
@@ -36,20 +50,40 @@ entry:
 	jmp dword 8h:entry_of_protected_mode ;  all 16 bit code will be invalid from now (until we switch back to real mode)
 
 ; --- Error handlers ---
+.free_error:
+	mov si, .msgErrorFree
+	call print_string
+	jmp .error
+
+.alloc_error:
+	mov si, .msgErrorAlloc
+	call print_string
+	jmp .error
+
 .a20_error:
 	mov si, .msgErrorA20
 	call print_string
-
 	jmp .error
 
 .error:
-	cli
 	hlt
+	jmp .error
 
 
 ; --- Messages ---
+.msgErrorFree	db 'Freeing memory failed.', 0x0D, 0x0A, 0
+.msgErrorAlloc	db 'Allocating memory failed.', 0x0D, 0x0A, 0
 .msgErrorA20	db 'Could not open the A20 line.', 0x0D, 0x0A, 0
 .msgPModeSwitch	db 'Switching to protected mode ...', 0x0D, 0x0A, 0
+.msgTest		db 'test', 0x0D, 0x0A, 0
+
+; --- Variables ---
+section .bss
+mem1 resd 1
+mem2 resd 1
+mem3 resd 1
+
+section .text
 
 
 ; ================
@@ -255,7 +289,7 @@ open_a20_bios:
 	int 15h
 	jne .failure	; couldn't activate the gate
 	cmp ah, 0
-	jne .failure	; cou;dn't activate the gate
+	jne .failure	; couldn't activate the gate
 
 .success:
 	mov ax, 0
@@ -395,7 +429,13 @@ check_a20:
 	ret
 
 ; SI [IN] = location of zero terminated string to print
+global print_string
 print_string:
+	push ax
+	push bx
+	push si
+
+.char_loop:
 	lodsb		; grab byte from si
 
 	or al, al  ; logical or AL by itself
@@ -404,11 +444,16 @@ print_string:
 	mov ah, 0x0E
 	int 0x10      ; otherwise, print out the character!
 
-	jmp print_string
+	jmp .char_loop
+
 .done:
+	pop si
+	pop bx
+	pop ax
 	ret
 
 ; AL [IN] = character to print, fully state preserving
+global print_char
 print_char:
 	push ax
 	push bx
@@ -423,6 +468,7 @@ print_char:
 
 ; basically from there: http://wiki.osdev.org/Real_mode_assembly_II,
 ; extended to whole ax
+global print_hex
 print_hex:
 	push ax
 	push bx
@@ -460,6 +506,7 @@ print_hex:
 .temp dw 0
 
 ; Print entire eax
+global print_hex_dword
 print_hex_dword:
 	rol eax, 16
 	call print_hex
@@ -507,60 +554,59 @@ retrieve_memory_map_int15:
 
 	; possible error, but the last valid descriptor might be indicated with
 	; carry
-	test byte [.first], 0
-	je .error
-
-	; consolidate last valid descriptor indication
-	xor ebx, ebx
+	cmp byte [.first], 1
+	je .success
+	jmp .error
 
 .no_error:
 	; indicate success
 	mov byte [.first], 1
-	
-	; print descriptor
-	mov si, .msgDescriptorBase
-	call print_string
 
-	mov eax, [.descriptor + 4]
-	call print_hex_dword
+	; Store entry in System Memory Map
+	push eax
+	push ebx
+	push ecx
+	push edx
+
 	mov eax, [.descriptor]
-	call print_hex_dword
+	mov ebx, [.descriptor + 4]
+	mov ecx, [.descriptor + 8]
+	mov edx, [.descriptor + 12]
 
-	mov si, .msgDescriptorLength
-	call print_string
+	cmp dword [.descriptor + 16], 1
+	je .add_free_entry
 
-	mov eax, [.descriptor + 12]
-	call print_hex_dword
-	mov eax, [.descriptor + 8]
-	call print_hex_dword
+	cmp dword [.descriptor + 16], 2
+	je .add_reserved_entry
 
-	mov si, .msgDescriptorLengthEnd
+	cmp dword [.descriptor + 16], 3
+	je .add_acpi_reclaim_entry
+
+	cmp dword [.descriptor + 16],4
+	je .add_acpi_nvs_entry
+
+	; Undefined entry type, treat as reserved
+	mov si, .msgUndefinedType
 	call print_string
 
 	mov eax, [.descriptor + 16]
+	call print_hex_dword
 
-	cmp eax, 1
-	je .arm
-
-	cmp eax, 2
-	je .arr
-
-	mov si, .msgDescriptorUndefined
-	jmp .print_type
-
-.arm:
-	mov si, .msgDescriptorARM
-	jmp .print_type
-
-.arr:
-	mov si, .msgDescriptorARR
-
-.print_type:
+	mov si, .msgUndefinedTypeEnd
 	call print_string
+
+	jmp .add_reserved_entry
+
+.descriptor_handled:
+	pop edx
+	pop ecx
+	pop ebx
+	pop eax
 
 	cmp ebx, 0
 	jne .query_loop
 
+.success:
 	mov si, .msgOk
 	call print_string
 
@@ -579,18 +625,35 @@ retrieve_memory_map_int15:
 	call print_string
 	jmp .end
 
+
+.add_free_entry:
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_FREE
+	call SystemMemoryMap_add
+	jmp .descriptor_handled
+
+.add_reserved_entry:
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_RESERVED
+	call SystemMemoryMap_add
+	jmp .descriptor_handled
+
+.add_acpi_reclaim_entry:
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_ACPI_RECLAIM
+	call SystemMemoryMap_add
+	jmp .descriptor_handled
+
+.add_acpi_nvs_entry:
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_ACPI_NVS
+	call SystemMemoryMap_add
+	jmp .descriptor_handled
+
 .first db 0
 
 .descriptor times 20 db 0
-.msgMemMap db 'Retrieving memory map ', 0
-.msgError db ' [failed]', 0dh, 0ah, 0
-.msgOk db ' [OK]', 0dh, 0ah, 0
-.msgDescriptorBase db 0dh, 0ah, 'Base: 0x', 0
-.msgDescriptorLength db ', Length: ', 0
-.msgDescriptorLengthEnd db 'h, ', 0
-.msgDescriptorARM db 'AddressRangeMemory', 0
-.msgDescriptorARR db 'AddressRangeReserved', 0
-.msgDescriptorUndefined db 'undefined', 0
+.msgMemMap				db 'Retrieving memory map ', 0
+.msgError				db ' [failed]', 0dh, 0ah, 0
+.msgOk					db ' [OK]', 0dh, 0ah, 0
+.msgUndefinedType		db 'Undefined descriptor type: ', 0
+.msgUndefinedTypeEnd	db 'h, treeted as reserved.', 0dh, 0ah, 0
 
 
 ; ====================================
