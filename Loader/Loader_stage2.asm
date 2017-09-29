@@ -17,12 +17,59 @@ entry:
 
 	; Initialize System Memory Map
 	call SystemMemoryMap_init
+	call SystemMemoryMap_print
+
+	call wait_for_key_press
 
 	; Retrieve memory map using int 15h with ax=e820h
 	call retrieve_memory_map_int15
+	jc .int15_error
+
+	; Add well-known BIOS ranges to SMAP
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_WELL_KNOWN_PC
+
+	; Real-mode IVT
+	xor eax, eax
+	xor ebx, ebx
+	mov ecx, 400h
+	xor edx, edx
+
+	call SystemMemoryMap_add
+	jc .smap_add_error
+
+	; BDA
+	mov eax, 0x400
+	mov ecx, 100h
+
+	call SystemMemoryMap_add
+	jc .smap_add_error
+
+	; EBDA
+	mov eax, 0x9fc00
+	mov ecx, 400h
+
+	; call SystemMemoryMap_add
+	; jc .smap_add_error
+
+	; Video and ROM
+	mov eax, 0xa0000
+	mov ecx, 60000h
+
+	; call SystemMemoryMap_add
+	; jc .smap_add_error
+
 	call SystemMemoryMap_print
 
+	call wait_for_key_press
+
 	call SystemMemoryMap_sort
+	call SystemMemoryMap_print
+
+	call wait_for_key_press
+
+	call SystemMemoryMap_makeDisjoint
+	jc .smap_disjoint_error
+
 	call SystemMemoryMap_print
 
 	; End execution here for now
@@ -50,13 +97,18 @@ entry:
 	jmp dword 8h:entry_of_protected_mode ;  all 16 bit code will be invalid from now (until we switch back to real mode)
 
 ; --- Error handlers ---
-.free_error:
-	mov si, .msgErrorFree
+.smap_disjoint_error:
+	mov si, .msgErrorSmapDisjoint
 	call print_string
 	jmp .error
 
-.alloc_error:
-	mov si, .msgErrorAlloc
+.smap_add_error:
+	mov si, .msgErrorSmapAdd
+	call print_string
+	jmp .error
+
+.int15_error:
+	mov si, .msgErrorInt15
 	call print_string
 	jmp .error
 
@@ -71,11 +123,12 @@ entry:
 
 
 ; --- Messages ---
-.msgErrorFree	db 'Freeing memory failed.', 0x0D, 0x0A, 0
-.msgErrorAlloc	db 'Allocating memory failed.', 0x0D, 0x0A, 0
-.msgErrorA20	db 'Could not open the A20 line.', 0x0D, 0x0A, 0
-.msgPModeSwitch	db 'Switching to protected mode ...', 0x0D, 0x0A, 0
-.msgTest		db 'test', 0x0D, 0x0A, 0
+.msgErrorSmapDisjoint	db 'Failed to make SMAP disjoint', 0dh, 0ah, 0
+.msgErrorSmapAdd		db 'Failed to add an entry to the SMAP', 0dh, 0ah, 0
+.msgErrorInt15			db 'Failed to retrieve the SMAP through int 15.', 0dh, 0ah, 0
+.msgErrorA20			db 'Could not open the A20 line.', 0x0D, 0x0A, 0
+.msgPModeSwitch			db 'Switching to protected mode ...', 0x0D, 0x0A, 0
+.msgTest				db 'test', 0x0D, 0x0A, 0
 
 ; --- Variables ---
 section .bss
@@ -516,10 +569,24 @@ print_hex_dword:
 	ret
 
 
+; Function:   wait_for_keypress
+; Purpose:    to wait until a key is pressed. Fully CPU state preserving.
+; Parameters: None.
+wait_for_key_press:
+	push ax
+
+	xor ah, ah
+	int 16h
+
+	pop ax
+	ret
+
+
 ; Function:   retrieve_memory_map_int15
 ; Purpose:    to query the memory map from the BIOS using int 15h with ax=e820h.
 ;             Self evidently in a fully CPU state preserving way.
 ; Parameters: none
+; Returns:    CARRY: Set on error, cleared otherwise
 retrieve_memory_map_int15:
 	push eax
 	push ebx
@@ -595,9 +662,13 @@ retrieve_memory_map_int15:
 	mov si, .msgUndefinedTypeEnd
 	call print_string
 
+	; Treat undefined entry as reserved
 	jmp .add_reserved_entry
 
-.descriptor_handled:
+.descriptor_add_entry:
+	call SystemMemoryMap_add
+	jc .error
+
 	pop edx
 	pop ecx
 	pop ebx
@@ -609,6 +680,9 @@ retrieve_memory_map_int15:
 .success:
 	mov si, .msgOk
 	call print_string
+
+	; Indicate OK
+	clc
 
 .end:
 	pop es
@@ -623,28 +697,27 @@ retrieve_memory_map_int15:
 .error:
 	mov si, .msgError
 	call print_string
+
+	; Indicate error
+	stc
 	jmp .end
 
 
 .add_free_entry:
 	mov esi, SYSTEM_MEMORY_MAP_ENTRY_FREE
-	call SystemMemoryMap_add
-	jmp .descriptor_handled
+	jmp .descriptor_add_entry
 
 .add_reserved_entry:
 	mov esi, SYSTEM_MEMORY_MAP_ENTRY_RESERVED
-	call SystemMemoryMap_add
-	jmp .descriptor_handled
+	jmp .descriptor_add_entry
 
 .add_acpi_reclaim_entry:
 	mov esi, SYSTEM_MEMORY_MAP_ENTRY_ACPI_RECLAIM
-	call SystemMemoryMap_add
-	jmp .descriptor_handled
+	jmp .descriptor_add_entry
 
 .add_acpi_nvs_entry:
 	mov esi, SYSTEM_MEMORY_MAP_ENTRY_ACPI_NVS
-	call SystemMemoryMap_add
-	jmp .descriptor_handled
+	jmp .descriptor_add_entry
 
 .first db 0
 
@@ -756,7 +829,7 @@ entry_of_protected_mode:
 
 	dec ecx				; one sector already read
 	inc ebx				; update LBA
-	add edi, 200h			; update destination
+	add edi, 200h		; update destination
 	mov al, 0			; drive number was destroyed
 	call floppy_read_data		; read remaining sectors
 	or eax, eax			; is EAX 0?
@@ -764,6 +837,10 @@ entry_of_protected_mode:
 
 	mov esi, .p_msgOK
 	call p_print_string
+
+	; Add Loader to SMAP
+
+	; Add Kernel to SMAP
 
 .transfer_control:
 	mov esi, .p_msgKernelExecution
