@@ -6,9 +6,6 @@
 
 extern SystemMemoryMap_init
 extern SystemMemoryMap_add
-extern SystemMemoryMap_sort
-extern SystemMemoryMap_collate
-extern SystemMemoryMap_makeDisjoint
 extern SystemMemoryMap_print
 
 %endif

@@ -43,20 +43,37 @@ SystemMemoryMap_init:
 global SystemMemoryMap_add
 SystemMemoryMap_add:
 	push eax
+	push ebx
+	push ecx
+	push edx
+	push esi
 	push edi
 
-	; eax shall not be altered, but is needed as parameter
-	xchg eax, edi
+	; If size == 0, we're done.
+	or ecx, ecx
+	jnz .size_bigger_0
 
-	; Allocate memory for the new entry
+	or edx, edx
+	jnz .size_bigger_0
+	jmp .success
+
+.size_bigger_0:
+	; Create new entry
+	push eax
+
 	mov eax, SYSTEM_MEMORY_MAP_ENTRY_SIZE
 	call EarlyDynamicMemory_allocate
+
+	mov edi, eax
+	pop eax
+
 	jc .error
 
-	xchg edi, eax
-
 	; Fill out fields
-	; Start address
+	; Type
+	mov [edi + 8], esi
+
+	; Base
 	mov [edi + 0ch], eax
 	mov [edi + 0ch + 4], ebx
 
@@ -64,452 +81,161 @@ SystemMemoryMap_add:
 	mov [edi + 14h], ecx
 	mov [edi + 14h + 4], edx
 
-	; type
-	mov [edi + 8], esi
-
-	; Prepend the entry to the list (it's O(1))
+	; Meta data
 	xor eax, eax
 	mov [edi], eax
-
-	mov eax, [system_memory_map]
 	mov [edi + 4], eax
-	mov [system_memory_map], edi
 
-	or eax, eax
-	jz .adding_list_done
+	mov ebx, edi
 
-	mov [eax], edi
-
-.adding_list_done:
-.success:
-	clc
-
-.end:
-	pop edi
-	pop eax
-	ret
-
-
-.error:
-	stc
-	jmp .end
-
-
-; Function:   SystemMemoryMap_sort
-; Purpose:    to sort the memory map by start address.
-;             Fully CPU state preserving.
-; Parameters: None.
-;
-; Pseudo-code:
-;
-;	Input: list
-;	Output: list
-;
-;	decl newList = NULL
-;
-;	while (list != NULL)
-;		e = list
-;		list = list->next
-;		list->prev = 0
-;
-;		if (newList == NULL)
-;			e->next = e->prev = NULL
-;			newList = e
-;		else
-;			b = newList
-;
-;			for (;;)
-;				if (b.value > e.value)
-;					e->prev = b->prev
-;					e->prev->next=e
-;					e->next = b
-;					e->next->prev = e
-;					break
-;
-;				if (b->next == NULL)
-;					b->next = e
-;					e->prev = b
-;					e->next = NULL
-;					break;
-;
-;				b = b->next
-;
-;	list = newList
-;
-global SystemMemoryMap_sort
-SystemMemoryMap_sort:
-	push eax
-	push ebx
-	push ecx
-	push edx
-	push esi
-	push edi
-
-	; esi = original list
+	; Add ebx to the list
+	; esi = current list
 	mov esi, [system_memory_map]
 
 	; edi = new list
 	xor edi, edi
 
-.sort_loop:
-	; Is an unsorted element left?
-	or esi, esi
-	jz .sort_done
+	; eax = popFront(esi)
+	call SystemMemoryMap_popFront
+	mov eax, ecx
 
-	; eax = esi.pop_front
-	mov eax, esi
-	mov esi, [esi + 4]
+	; Main loop that runs until all ranges are handled
+.main_loop:
+	; If eax == 0 && ebx == 0, we're done
+	or eax, eax
+	jnz .main_loop_body
+
+	or ebx, ebx
+	jnz .main_loop_body
+	jmp .main_loop_done
+
+.main_loop_body:
+	; If eax == 0, add ebx and continue
+	or eax, eax
+	jnz .main_loop_check_ebx_0
+
+	mov edx, ebx
+	call SystemMemoryMap_pushBack
 
 	xor ebx, ebx
-	mov [esi], ebx
+	jmp .main_loop
 
-	; if (edi = NULL)
-	or edi, edi
-	jz .new_list_empty_yet
+.main_loop_check_ebx_0:
+	; If ebx == 0, add eax
+	or ebx, ebx
+	jnz .main_loop_both_valid
 
-	; else
-	; Find position in the already existing part of the new list
-	; ebx = newList
-	mov ebx, edi
+	mov edx, eax
+	call SystemMemoryMap_pushBack
 
-.find_position_loop:
-	; ebx->value >= eax->value?
-	; Only jb, jae working, because only CF is set right. Since sorting doesn't
-	; need to be stable, it is ok to use >= instead of >.
+	; eax = popFront(esi)
+	call SystemMemoryMap_popFront
+	mov eax, ecx
+	jmp .main_loop
+
+.main_loop_both_valid:
+	; Distinguish eax.base <= ebx.base
+	; equivalent: ebx.base >= eax.base
 	mov ecx, [ebx + 0ch]
 	mov edx, [ebx + 0ch + 4]
 
 	sub ecx, [eax + 0ch]
 	sbb edx, [eax + 0ch + 4]
+	jb .main_loop_ebx_base_lower
 
-	; if not, continue
-	jb .find_position_check_end
+	; eax.base <= ebx.base
+	; eax intersects with ebx?
+	call SystemMemoryMap_intersectsWith
+	jnc .eax_base_lower_no_intersection
 
-	; Position found. Insert.
-	; eax->next = ebx
-	mov [eax + 4], ebx
+	; eax, ebx intersect
+	call SystemMemoryMap_addIntersectingElement
+	jc .error
 
-	; eax->prev = ebx->prev
-	mov ecx, [ebx]
-	mov [eax], ecx
+	; If eax.size == 0, free eax and fetch next range from esi
+	; Then, continue.
+	mov ecx, [eax + 14h]
+	mov edx, [eax + 14h + 4]
 
-	; ebx->prev = eax
-	mov [ebx], eax
-
-	; if (eax->prev) eax->prev->next = eax
-	mov ecx, [eax]
 	or ecx, ecx
-	jz .find_position_adjust_start
+	jnz .main_loop
 
-	mov [ecx + 4], eax
+	or edx, edx
+	jnz .main_loop
 
-.find_position_adjust_start:
-	; if (ebx == edi)	// that is, eax was prepended
-	cmp ebx, edi
-	jne .sort_next_round
+	; Free memory
+	call EarlyDynamicMemory_free
+	jc .error
 
-	mov edi, eax
-	jmp .sort_next_round
+	; Fetch next element
+	call SystemMemoryMap_popFront
+	mov eax, ecx
+	jmp .main_loop
 
-.find_position_check_end:
-	; At the end of the so-far new list?
-	; ebx->next == NULL?
-	mov ecx, [ebx + 4]
+.eax_base_lower_no_intersection:
+	; eax, ebx disjoint
+	; Add eax and fetch next range from esi
+	mov edx, eax
+	call SystemMemoryMap_pushBack
+
+	call SystemMemoryMap_popFront
+	mov eax, ecx
+	jmp .main_loop
+
+.main_loop_ebx_base_lower:
+	; eax.base > ebx.base
+	; Do eax and ebx intersect?
+	call SystemMemoryMap_intersectsWith
+	jnc .ebx_base_lower_no_intersection
+
+	; eax, ebx intersect
+	; eax.base > ebx.base
+	xchg eax, ebx
+
+	call SystemMemoryMap_addIntersectingElement
+	jc .error
+
+	xchg eax, ebx
+
+	; If ebx.size == 0, set ebx = 0
+	; Then, continue.
+	mov ecx, [ebx + 14h]
+	mov edx, [ebx + 14h + 4]
+
 	or ecx, ecx
+	jnz .main_loop
 
-	; If not, continue
-	jnz .find_position_next_round
+	or edx, edx
+	jnz .main_loop
 
-	; If so, append eax; break
-	; ebx->next = eax
-	mov [ebx + 4], eax
+	; Free memory
+	push eax
 
-	; eax->prev = ebx
-	mov [eax], ebx
+	mov eax, ebx
+	call EarlyDynamicMemory_free
 
-	; eax->next = NULL
-	xor ecx, ecx
-	mov [eax + 4], ecx
+	pop eax
+	jc .error
 
-	; Element appended.
-	jmp .sort_next_round
-
-.find_position_next_round:
-	mov ebx, [ebx + 4]
-	jmp .find_position_loop
-
-.new_list_empty_yet:
-	; ... edi = eax; eax->prev = eax->next = NULL
 	xor ebx, ebx
-	mov [eax], ebx
-	mov [eax + 4], ebx
+	jmp .main_loop
 
-	mov edi, eax
+.ebx_base_lower_no_intersection:
+	; eax, ebx disjoint
+	; Add ebx
+	mov edx, ebx
+	call SystemMemoryMap_pushBack
 
-.sort_next_round:
-	jmp .sort_loop
+	xor ebx, ebx
+	jmp .main_loop
 
-
-.sort_done:
-	; list = new list
+.main_loop_done:
+	; Write new list to memory
 	mov [system_memory_map], edi
 
-.end:
-	pop edi
-	pop esi
-	pop edx
-	pop ecx
-	pop ebx
-	pop eax
-	ret
-
-
-; Function:   SystemMemoryMap_collate
-; Purpose:    to combine adjacent blocks of same type to one block of memory.
-;             Fully CPU state preserving.
-; Parameters: None.
-global SystemMemoryMap_collate
-SystemMemoryMap_collate:
-	push eax
-
-.end:
-	pop eax
-	ret
-
-
-; Function:   SystemMemoryMap_makeDisjoint
-; Purpose:    to remove overlapping in the memory map with the following
-;             priority: 1.) reserved, 2.) ACPI NVS, 3.) ACPI Reclaim,
-;             4.) Well-known-PC locations, 5.) Loader.text+data,
-;             6.) Loader.bss, 7.) Kernel.text+data, 8.) Kernel.bss, 9.) free
-; Parameters: None.
-; Returns:    CARRY: Set on error, cleared otherwise
-global SystemMemoryMap_makeDisjoint
-SystemMemoryMap_makeDisjoint:
-	push eax
-	push ebx
-	push ecx
-	push edx		; general purpose
-	push esi
-	push edi		; general purpose
-
-	; Sort list
-
-	; for each type in priority_list:
-	xor ecx, ecx
-
-.types_loop:
-	mov eax, [.priority_list + ecx * 4]
-
-	jmp .all_elements_handled
-
-	;	for each element of list:
-	; element =: ebx
-	mov ebx, [system_memory_map]
-
-.all_elements_loop:
-	or ebx, ebx
-	jz .all_elements_handled
-
-	;		if (element.type == type):
-	cmp [ebx + 8], eax
-	jne .all_elements_continue
-
-	;			for each c of list:
-	mov esi, [system_memory_map]
-
-.xprod_loop:
-	or esi, esi
-	jz .xprod_handled
-
-	;				if (element intersects with c):
-	; ebx < esi && ebx + ebx.size > esi ?
-	mov edx, [ebx + 0ch]
-	mov edi, [ebx + 0ch + 4]
-
-	sub edx, [esi + 0ch]
-	sbb edi, [esi + 0ch + 4]
-
-	jae .xprod_loop_ebx_above
-
-	; ebx + ebx.size
-	mov edx, [ebx + 0ch]
-	mov edi, [ebx + 0ch + 4]
-
-	add edx, [ebx + 14h]
-	adc edi, [ebx + 14h + 4]
-
-	; ebx + ebx.size - 1 >= esi
-	stc
-	sbb edx, [esi + 0ch]
-	sbb edi, [esi + 0ch + 4]
-	jae .xprod_loop_intersect
-
-	jmp .xprod_continue
-
-.xprod_loop_ebx_above:
-	; esi <= ebx !, esi + esi.size > ebx ?
-	; esi + esi.size
-	mov edx, [esi + 0ch]
-	mov edi, [esi + 0ch + 4]
-
-	add edx, [esi + 14h]
-	adc edi, [esi + 14h + 4]
-
-	; esi + esi.size - 1 >= eax
-	stc
-	sbb edx, [ebx + 0ch]
-	sbb edi, [ebx + 0ch + 4]
-	jae .xprod_loop_intersect
-
-	jmp .xprod_continue
-
-.xprod_loop_intersect:
-	;					if (element != c):
-	cmp ebx, esi
-	je .xprod_continue
-
-	;						if (element.type == c.type):
-	mov edx, [ebx + 8]
-	cmp edx, [esi + 8]
-	jne .xprod_loop_types_differ
-
-	;							unite element, c (c.start > element.start)
-	;							--> element swallows c
-	; ebx.size = ebx.size + esi.size - (ebx + ebx.size - esi)
-	;          = ebx.size + esi.size + esi - ebx - ebx.size
-	;          = esi + esi.size - ebx = esi - ebx + esi.size
-	mov edx, [esi + 0ch]
-	mov edi, [esi + 0ch + 4]
-
-	sub edx, [ebx + 0ch]
-	sbb edi, [ebx + 0ch + 4]
-
-	add edx, [esi + 14h]
-	adc edi, [esi + 14h + 4]
-
-	mov [ebx + 14h], edx
-	mov [ebx + 14h + 4], edi
-
-	; remove element (ebx) from list
-	mov edx, [ebx]
-	mov edi, [ebx + 4]
-
-	; if (ebx.prev) ebx.prev.next = ebx.next
-	or edx, edx
-	jz .xprod_loop_intersect_remove_foreward
-
-	mov [edx + 4], edi
-
-.xprod_loop_intersect_remove_foreward:
-	; if (ebx.next) ebx.next.prev = ebx.prev
-	or edi, edi
-	jz .xprod_loop_intersect_free_element
-
-	mov [edi], edx
-
-.xprod_loop_intersect_free_element:
-	; free memory of element (ebx)
-	push eax
-
-	mov eax, ebx
-
-	; c := c.prev, only then c := c.next in .all_elements_continue will have
-	; the same effect as if c was not removed.
-	mov ebx, [ebx]
-	call EarlyDynamicMemory_free
-
-	pop eax
+	; Consolidate list
+	call SystemMemoryMap_consolidate
 	jc .error
-
-	jmp .xprod_continue
-
-.xprod_loop_types_differ:
-	;						else:
-	;							Entry d = NULL
-	xor edx, edx
-	mov [.entryD], edx
-
-	;
-	;							if (element + element.size > c + c.size):
-	;								add d = [c + c.size,element + element.size)
-
-	;							if (element < c):
-	; ebx < esi ?
-	mov edx, [ebx + 0ch]
-	mov edi, [ebx + 0ch + 4]
-
-	sub edx, [esi + 0ch]
-	sbb edi, [esi + 0ch + 4]
-	jae .xprod_loop_types_differ_no_lower
-
-	;								element.size = c - element
-	; ebx.size = esi - ebx
-	mov edx, [esi + 0ch]
-	mov edi, [esi + 0ch + 4]
-
-	sub edx, [ebx + 0ch]
-	sbb edi, [ebx + 0ch + 4]
-
-	jmp .xprod_continue
-
-.xprod_loop_types_differ_no_lower:
-	;							else:
-	;								remove element
-	mov edx, [ebx]
-	mov edi, [ebx + 4]
-
-	; if (ebx.prev) ebx.prev.next = ebx.next
-	or edx, edx
-	jz .xprod_loop_types_differ_upper_remove_foreward
-
-	mov [edx + 4], edi
-
-.xprod_loop_types_differ_upper_remove_foreward:
-	; if (ebx.next) ebx.next.prev = ebx.prev
-	or edi, edi
-	jz .xprod_loop_types_differ_upper_free_element
-
-	mov [edi + 4], edx
-
-.xprod_loop_types_differ_upper_free_element:
-	; free memory of element (ebx)
-	push eax
-	mov eax, ebx
-
-	; element := element.prev, otherwise element := element.next in
-	; .all_elements_continue would not have the same effect as if element was
-	; not removed.
-	mov ebx, [ebx]
-	call EarlyDynamicMemory_free
-	pop eax
-
-	jc .error
-
-	;
-	;							if (d):
-	mov edx, [.entryD]
-	or edx, edx
-	jz .xprod_continue
-
-	;								element = d
-	mov ebx, [.entryD]
-	jmp .xprod_continue
-
-.xprod_continue:
-	; Next element
-	mov esi, [esi + 4]
-
-.xprod_handled:
-.all_elements_continue:
-	; Next element
-	mov ebx, [ebx + 4]
-
-.all_elements_handled:
-	; increase types loop index
-	inc ecx
-	cmp ecx, 9
-	jb .types_loop
 
 .success:
 	clc
@@ -523,23 +249,577 @@ SystemMemoryMap_makeDisjoint:
 	pop eax
 	ret
 
+.error:
+	stc
+	jmp .end
+
+
+; Function:   SystemMemoryMap_addIntersectingElement
+; Purpose:    helper function for SystemMemoryMap_add, used when two memory
+;             ranges intersect. Fully CPU state preserving.
+; Parameters: EDI [IN OUT]: Map's list to which ranges are added
+;             EAX [IN]:     Range with lower (or equal) base address
+;             EBX [IN]:     Range with higher (or equal) base address
+; Returns:    CARRY:        Set on error (memory allocation!),
+;                           cleared otherwise.
+SystemMemoryMap_addIntersectingElement:
+	push ecx
+	push edx
+
+	; For now, always prefer right element (ebx)
+	; eax.base < ebx.base ?
+	mov ecx, [eax + 0ch]
+	mov edx, [eax + 0ch + 4]
+
+	sub ecx, [ebx + 0ch]
+	sbb edx, [ebx + 0ch + 4]
+	jae .right_part
+
+	; If so, add [eax.base, ebx.base)
+	; Allocate memory for the new entry
+	push eax
+
+	mov eax, SYSTEM_MEMORY_MAP_ENTRY_SIZE
+	call EarlyDynamicMemory_allocate
+
+	mov edx, eax
+	pop eax
+
+	jc .error
+
+	; Fill out fields
+	; Meta data
+	xor ecx, ecx
+	mov [edx], ecx
+	mov [edx + 4], ecx
+
+	; Type
+	mov ecx, [eax + 8]
+	mov [edx + 8], ecx
+
+	; edx.base = eax.base
+	mov ecx, [eax + 0ch]
+	mov [edx + 0ch], ecx
+
+	mov ecx, [eax + 0ch + 4]
+	mov [edx + 0ch + 4], ecx
+
+	; edx.size = ebx.base - eax.base
+	mov ecx, [ebx + 0ch]
+	sub ecx, [eax + 0ch]
+	mov [edx + 14h], ecx
+
+	mov ecx, [ebx + 0ch + 4]
+	sbb ecx, [eax + 0ch + 4]
+	mov [edx + 14h + 4], ecx
+
+	; eax.size -= edx.size
+	mov ecx, [edx + 14h]
+	sub [eax + 14h], ecx
+
+	mov ecx, [edx + 14h + 4]
+	sbb [eax + 14h + 4], ecx
+
+	; eax.base = ebx.base
+	mov ecx, [ebx + 0ch]
+	mov [eax + 0ch], ecx
+
+	mov ecx, [ebx + 0ch + 4]
+	mov [eax + 0ch + 4], ecx
+
+	; Add edx to edi
+	call SystemMemoryMap_pushBack
+
+.right_part:
+	; Compute eax.base + eax.size and ebx.base + ebx.size and put it onto the
+	; stack.
+	; esp + C: HIGH(ebx.base + ebx.size)
+	; esp + 8: LOW (ebx.base + ebx.size)
+	; esp + 4: HIGH(eax.base + eax.size)
+	; esp + 0: LOW (eax.base + eax.size)
+
+	; ebx.base + ebx.size
+	mov ecx, [ebx + 0ch]
+	mov edx, [ebx + 0ch + 4]
+
+	add ecx, [ebx + 14h]
+	adc edx, [ebx + 14h + 4]
+
+	push edx
+	push ecx
+
+	; eax.base + eax.size
+	mov ecx, [eax + 0ch]
+	mov edx, [eax + 0ch + 4]
+
+	add ecx, [eax + 14h]
+	adc edx, [eax + 14h + 4]
+
+	push edx
+	push ecx
+
+	; eax.base + eax.size > ebx.base + ebx.size ?
+	; equivalent: ebx.base + ebx.size < eax.base + eax.size
+	mov ecx, [esp + 8]
+	mov edx, [esp + 0ch]
+
+	sub ecx, [esp]
+	sbb edx, [esp + 4]
+
+	jae .right_part_check_ebx_bigger
+
+	; Adapt eax to represent the right part
+	; eax.size := eax.base + eax.size - (ebx.base + ebx.size)
+	mov ecx, [esp]
+	mov edx, [esp + 4]
+
+	sub ecx, [esp + 8]
+	sbb edx, [esp + 0ch]
+
+	; Write to memory
+	mov [eax + 14h], ecx
+	mov [eax + 14h + 4], edx
+
+	; eax.base = ebx.base + ebx.size
+	mov ecx, [esp + 8]
+	mov edx, [esp + 0ch]
+
+	mov [eax + 0ch], ecx
+	mov [eax + 0ch + 4], edx
+
+	; r.type = preferred type
+	call SystemMemoryMap_getPreferredType
+	mov [ebx + 8], ecx
+	jmp .right_part_clean_stack
+
+.right_part_check_ebx_bigger:
+	; ebx.base + ebx.size > eax.base + eax.size ?
+	; equivalent: eax.base + eax.size < ebx.base + ebx.size ?
+	mov ecx, [esp]
+	mov edx, [esp + 4]
+
+	sub ecx, [esp + 8]
+	sbb edx, [esp + 0ch]
+
+	jae .no_right_part
+
+	; ebx.size = ebx.base + ebx.size - (eax.base + eax.size)
+	mov ecx, [esp + 8]
+	mov edx, [esp + 0ch]
+
+	sub ecx, [esp]
+	sbb edx, [esp + 4]
+
+	mov [ebx + 14h], ecx
+	mov [ebx + 14h + 4], edx
+
+	; ebx.base = eax.base + eax.size
+	mov ecx, [esp]
+	mov edx, [esp + 4]
+
+	mov [ebx + 0ch], ecx
+	mov [ebx + 0ch + 4], edx
+
+	; l.type = preferred type
+	call SystemMemoryMap_getPreferredType
+	mov [eax + 8], ecx
+	jmp .right_part_clean_stack
+
+.no_right_part:
+	; No right part. Signal this by setting eax.size = 0.
+	xor ecx, ecx
+	mov [eax + 14h], ecx
+	mov [eax + 14h + 4], ecx
+
+	; ebx.type = preferred type
+	call SystemMemoryMap_getPreferredType
+	mov [ebx + 8], ecx
+	jmp .right_part_clean_stack
+
+.right_part_clean_stack:
+	add esp, 16
+
+.success:
+	clc
+
+.end:
+	pop edx
+	pop ecx
+	ret
 
 .error:
 	stc
 	jmp .end
 
-.priority_list:
-	dd SYSTEM_MEMORY_MAP_ENTRY_FREE
-	dd SYSTEM_MEMORY_MAP_ENTRY_KERNEL_BSS
-	dd SYSTEM_MEMORY_MAP_ENTRY_KERNEL_TEXT_DATA
-	dd SYSTEM_MEMORY_MAP_ENTRY_LOADER_BSS
-	dd SYSTEM_MEMORY_MAP_ENTRY_LOADER_TEXT_DATA
-	dd SYSTEM_MEMORY_MAP_ENTRY_WELL_KNOWN_PC
-	dd SYSTEM_MEMORY_MAP_ENTRY_ACPI_RECLAIM
-	dd SYSTEM_MEMORY_MAP_ENTRY_ACPI_NVS
-	dd SYSTEM_MEMORY_MAP_ENTRY_RESERVED
 
-.entryD dd 0
+; Function:   SystemMemoryMap_getPreferredType
+; Purpose:    to return the preferred type of the two memory ranges.
+;             Helper function for SystemMemoryMap_addIntersectingElement.
+;             Fully CPU state preserving.
+; Parameters: EAX [IN]:  First memory range
+;             EBX [IN]:  Second memory range
+; Returns:    ECX [OUT]: The preferred type of the two ranges.
+SystemMemoryMap_getPreferredType:
+	push edx
+
+	; eax.type > ebx.type ?
+	mov ecx, [eax + 8]
+	mov edx, [ebx + 8]
+
+	cmp ecx, edx
+	jbe .ebx_bigger
+
+	; If so, ebx.type is preferred
+	mov ecx, edx
+	jmp .end
+
+.ebx_bigger:
+	; If ebx.type > eax.type, eax.type is preferred.
+
+.end:
+	pop edx
+	ret
+
+
+; Function:   SystemMemoryMap_consolidate
+; Purpose:    helper function for SystemMemoryMap_add, consolidates touching
+;             memory ranges. Fully CPU state preserving.
+; Parameters: None.
+; Returns:    CARRY: Set on error, cleared otherwise.
+SystemMemoryMap_consolidate:
+	push eax
+	push ebx
+	push ecx
+
+	; Fetch the list's start address
+	mov eax, [system_memory_map]
+
+	; If the list's empty, we're done.
+	or eax, eax
+	jz .success
+
+	; Main loop to walk through list
+.main_loop:
+	; Get eax.next
+	mov ebx, [eax + 4]
+	or ebx, ebx
+	jz .success
+
+	; Are eax, ebx in touch?
+	call SystemMemoryMap_inTouchWith
+	jnc .no_merge
+
+	; eax.type == ebx.type ?
+	mov ecx, [eax + 8]
+	cmp ecx, [ebx + 8]
+	jne .no_merge
+
+	; eax, ebx are in touch, remove ebx from list
+	; eax.next = ebx.next
+	mov ecx, [ebx + 4]
+	mov [eax + 4], ecx
+
+	; if ebx.next, ebx.next.previous = eax
+	or ecx, ecx
+	jz .in_touch_adjust_size
+
+	mov [ecx], eax
+
+.in_touch_adjust_size:
+	; eax.size += ebx.size
+	mov ecx, [ebx + 14h]
+	add [eax + 14h], ecx
+
+	mov ecx, [ebx + 14h + 4]
+	add [eax + 14h + 4], ecx
+
+	; Free memory
+	push eax
+
+	mov eax, ebx
+	call EarlyDynamicMemory_free
+
+	pop eax
+
+	jc .error
+	jmp .main_loop
+
+.no_merge:
+	; Next element
+	mov eax, ebx
+	jmp .main_loop
+
+.success:
+	clc
+
+.end:
+	pop ecx
+	pop ebx
+	pop eax
+	ret
+
+.error:
+	stc
+	jmp .end
+
+
+; Function:   SystemMemoryMap_intersectsWith
+; Purpose:    to find out if two memory ranges intersect.
+;             Fully CPU state preserving.
+;             For module-local use only.
+; Parameters: EAX [IN]: First range
+;             EBX [IN]: Second range
+; Returns:    CARRY:    Set if ranges intersect, cleared otherwise
+SystemMemoryMap_intersectsWith:
+	push ecx
+	push edx
+	push esi
+	push edi
+
+	; If eax.size == 0 || ebx.size == 0, we're done.
+	mov ecx, [eax + 14h]
+	or ecx, ecx
+	jnz .check_ebx_size
+
+	mov ecx, [eax + 14h + 4]
+	or ecx, ecx
+	jnz .check_ebx_size
+	jmp .no_intersection
+
+.check_ebx_size:
+	mov ecx, [ebx + 14h]
+	or ecx, ecx
+	jnz .no_size_0
+
+	mov ecx, [ebx + 14h + 4]
+	or ecx, ecx
+	jnz .no_size_0
+	jmp .no_intersection
+
+.no_size_0:
+	; eax.base < ebx.base?
+	mov ecx, [eax + 0ch]
+	mov edx, [eax + 0ch + 4]
+
+	sub ecx, [ebx + 0ch]
+	sbb edx, [ebx + 0ch + 4]
+	jae .eax_base_bigger
+
+	; Intersection exactly if eax.base + eax.size - 1 >= ebx.base
+	mov ecx, [eax + 0ch]
+	mov edx, [eax + 0ch + 4]
+
+	; eax.base + eax.size
+	add ecx, [eax + 14h]
+	adc edx, [eax + 14h + 4]
+
+	; - 1 done separately from comparison for handling
+	; eax.base + eax.size = 2^64.
+	; This is possible, because eax.size > 0 here.
+	xor esi, esi
+	inc esi
+	xor edi, edi
+
+	sub ecx, esi
+	sbb edx, edi
+
+	; Actual comparison
+	sub ecx, [ebx + 0ch]
+	sbb edx, [ebx + 0ch + 4]
+	jae .intersection
+	jmp .no_intersection
+
+
+.eax_base_bigger:
+	; Intersection exactly if ebx.base + ebx.size - 1 >= eax.base
+	mov ecx, [ebx + 0ch]
+	mov edx, [ebx + 0ch + 4]
+
+	; ebx.base + ebx.size
+	add ecx, [ebx + 14h]
+	adc edx, [ebx + 14h + 4]
+
+	; - 1 (see above)
+	xor esi, esi
+	inc esi
+	xor edi, edi
+
+	sub ecx, esi
+	sbb edx, edi
+
+	; Actual comparison
+	sub ecx, [eax + 0ch]
+	sbb edx, [eax + 0ch + 4]
+	jae .intersection
+	jmp .no_intersection
+
+.intersection:
+	stc
+	jmp .end
+
+.no_intersection:
+	clc
+
+.end:
+	pop edi
+	pop esi
+	pop edx
+	pop ecx
+	ret
+
+
+; Function:   SystemMemoryMap_inTouchWith
+; Purpose:    to find out if two memory ranges have touching borders that is
+;             if there's no space between their borders and they're disjoint.
+;             Fully CPU state preserving.
+; Parameters: EAX [IN]: First range
+;             EBX [IN]: Second range
+; Returns:    CARRY:    Set if the ranges are touching, cleared otherwise
+SystemMemoryMap_inTouchWith:
+	push ecx
+	push edx
+
+	; If eax.size == 0 || ebx.size == 0, we're done.
+	mov ecx, [eax + 14h]
+	or ecx, ecx
+	jnz .check_ebx_size_0
+
+	mov ecx, [eax + 14h + 4]
+	jnz .check_ebx_size_0
+	jmp .not_touching
+
+.check_ebx_size_0:
+	mov ecx, [ebx + 14h]
+	or ecx, ecx
+	jnz .no_size_0
+
+	mov ecx, [ebx + 14h + 4]
+	or ecx, ecx
+	jnz .no_size_0
+	jmp .not_touching
+
+.no_size_0:
+	; eax.base + eax.size == ebx.base ?
+	mov ecx, [eax + 0ch]
+	mov edx, [eax + 0ch + 4]
+
+	add ecx, [eax + 14h]
+	adc edx, [eax + 14h + 4]
+
+	cmp ecx, [ebx + 0ch]
+	jne .check_other_end
+
+	cmp edx, [ebx + 0ch + 4]
+	jne .check_other_end
+	jmp .touching
+
+.check_other_end:
+	; ebx.base + ebx.size == eax.base ?
+	mov ecx, [ebx + 0ch]
+	mov edx, [ebx + 0ch + 4]
+
+	add ecx, [ebx + 14h]
+	adc edx, [ebx + 14h + 4]
+
+	cmp ecx, [eax + 0ch]
+	jne .not_touching
+
+	cmp edx, [eax + 0ch + 4]
+	jne .not_touching
+	jmp .touching
+
+.touching:
+	stc
+	jmp .end
+
+.not_touching:
+	clc
+
+.end:
+	pop edx
+	pop ecx
+	ret
+
+
+; Function:   SystemMemoryMap_popFront
+; Purpose:    to remove the first element from the map's list.
+;             Fully CPU state preserving.
+; Parameters: ESI [IN OUT]:  Pointer to the head of the list
+; Returns:    ECX [OUT]:     The removed first element or 0 if ESI is 0
+;                            (List empty)
+SystemMemoryMap_popFront:
+	push eax
+
+	; First element
+	mov ecx, esi
+
+	; If the list's empty, we're done.
+	or esi, esi
+	jz .end
+
+	; Advance esi
+	mov esi, [esi + 4]
+
+	; Clear backward reference
+	xor eax, eax
+	mov [esi], eax
+
+	; Clear ecx's references
+	mov [ecx], eax
+	mov [ecx + 4], eax
+
+.end:
+	; Return
+	pop eax
+	ret
+
+
+; Function:   SystemMemoryMap_pushBack
+; Purpose:    to append an element to the map's list.
+;             Fully CPU state preserving. Use with care, no error checking is
+;             done!
+; Parameters: EDI [IN OUT]: Pointer to the head of the list.
+;             EDX [IN]:     The element to add
+; Returns:    Nothing.
+SystemMemoryMap_pushBack:
+	push eax
+	push ebx
+
+	; If the list is still empty, it's trivial.
+	or edi, edi
+	jnz .list_not_empty
+
+	mov edi, edx
+	jmp .end
+
+.list_not_empty:
+	; Go to the end of the list
+	mov ebx, edi
+
+.seek_end_loop:
+	mov eax, [ebx + 4]
+	or eax, eax
+	jz .seek_end_reached
+
+	mov ebx, eax
+	jmp .seek_end_loop
+
+.seek_end_reached:
+	; ebx->next = edx
+	mov [ebx + 4], edx
+
+	; edx->previous = ebx
+	mov [edx], ebx
+
+	; edx->next = NULL
+	xor eax, eax
+	mov [edx + 4], eax
+	jmp .end
+
+.end:
+	pop ebx
+	pop eax
+	ret
 
 
 ; Function:   SystemMemoryMap_print
@@ -630,6 +910,9 @@ SystemMemoryMap_print:
 	call print_string
 
 	; List data
+	; Skip for now ...
+	jmp .print_continue
+
 	; Entry's Address
 	mov si, .msgAddress
 	call print_string
@@ -651,6 +934,7 @@ SystemMemoryMap_print:
 	mov eax, [ebx + 4]
 	call print_hex_dword
 
+.print_continue:
 	mov si, .msgCrLf
 	call print_string
 

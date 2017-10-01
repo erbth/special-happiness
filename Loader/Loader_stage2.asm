@@ -25,6 +25,10 @@ entry:
 	call retrieve_memory_map_int15
 	jc .int15_error
 
+	call SystemMemoryMap_print
+
+	call wait_for_key_press
+
 	; Add well-known BIOS ranges to SMAP
 	mov esi, SYSTEM_MEMORY_MAP_ENTRY_WELL_KNOWN_PC
 
@@ -48,27 +52,15 @@ entry:
 	mov eax, 0x9fc00
 	mov ecx, 400h
 
-	; call SystemMemoryMap_add
-	; jc .smap_add_error
+	call SystemMemoryMap_add
+	jc .smap_add_error
 
 	; Video and ROM
 	mov eax, 0xa0000
 	mov ecx, 60000h
 
-	; call SystemMemoryMap_add
-	; jc .smap_add_error
-
-	call SystemMemoryMap_print
-
-	call wait_for_key_press
-
-	call SystemMemoryMap_sort
-	call SystemMemoryMap_print
-
-	call wait_for_key_press
-
-	call SystemMemoryMap_makeDisjoint
-	jc .smap_disjoint_error
+	call SystemMemoryMap_add
+	jc .smap_add_error
 
 	call SystemMemoryMap_print
 
