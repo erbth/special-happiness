@@ -19,7 +19,9 @@ STAGE2_OBJ=Loader_stage2.o \
            Loader_floppy.o \
 		   CommonlyUsedData.o \
 		   Loader_EarlyDynamicMemory16.o \
-		   Loader_SystemMemoryMap16.o
+		   Loader_EarlyDynamicMemory32.o \
+		   Loader_SystemMemoryMap16.o \
+		   Loader_SystemMemoryMap32.o
 
 .PHONY: all
 all: $(OBJ_DIR) $(OBJ_DIR)/$(TARGET).bin

@@ -5,7 +5,7 @@ MODULE=Image
 TARGET=MyOS
 
 # Order matters!
-OS_BINARIES=Loader/Loader.bin #Kernel/Kernel.bin
+OS_BINARIES=Loader/Loader.bin Kernel/Kernel.bin
 
 .PHONY: all clean floppy
 all: $(OBJ_DIR)/$(TARGET).bin

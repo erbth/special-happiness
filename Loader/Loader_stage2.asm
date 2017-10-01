@@ -1,6 +1,7 @@
 %include "CommonConstants.inc"
 %include "Loader_EarlyDynamicMemory16.inc"
 %include "Loader_SystemMemoryMap16.inc"
+%include "Loader_SystemMemoryMap32.inc"
 
 section .text
 ; org 0x7E00  ; done by linker
@@ -17,17 +18,10 @@ entry:
 
 	; Initialize System Memory Map
 	call SystemMemoryMap_init
-	call SystemMemoryMap_print
-
-	call wait_for_key_press
 
 	; Retrieve memory map using int 15h with ax=e820h
 	call retrieve_memory_map_int15
 	jc .int15_error
-
-	call SystemMemoryMap_print
-
-	call wait_for_key_press
 
 	; Add well-known BIOS ranges to SMAP
 	mov esi, SYSTEM_MEMORY_MAP_ENTRY_WELL_KNOWN_PC
@@ -62,12 +56,9 @@ entry:
 	call SystemMemoryMap_add
 	jc .smap_add_error
 
+	; Print SMAP
 	call SystemMemoryMap_print
-
-	; End execution here for now
-.end:
-	hlt
-	jmp .end
+	call wait_for_key_press
 
 	; create and load gdt
 	call create_GDT
@@ -120,7 +111,6 @@ entry:
 .msgErrorInt15			db 'Failed to retrieve the SMAP through int 15.', 0dh, 0ah, 0
 .msgErrorA20			db 'Could not open the A20 line.', 0x0D, 0x0A, 0
 .msgPModeSwitch			db 'Switching to protected mode ...', 0x0D, 0x0A, 0
-.msgTest				db 'test', 0x0D, 0x0A, 0
 
 ; --- Variables ---
 section .bss
@@ -814,7 +804,7 @@ entry_of_protected_mode:
 	shr ecx, 9			; bytes to sectors
 
 	cmp ecx, 1			; if size <= 1 sector, we're done
-	jbe .transfer_control
+	jbe .kernel_loaded
 
 	mov esi, .p_msgFloppyReading
 	call p_print_string
@@ -830,11 +820,20 @@ entry_of_protected_mode:
 	mov esi, .p_msgOK
 	call p_print_string
 
+.kernel_loaded:
 	; Add Loader to SMAP
 
 	; Add Kernel to SMAP
 
-.transfer_control:
+	; Add Common to SMAP
+
+	; Print SMAP
+	call p_SystemMemoryMap_print
+
+	; end execution here for now
+	jmp .end
+
+	; Transfer control
 	mov esi, .p_msgKernelExecution
 	call p_print_string
 
