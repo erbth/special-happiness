@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include "stdio.h"
 #include "util.h"
 #include "string.h"
@@ -119,6 +120,55 @@ static void printf_handle_fmt_s(char* buffer, int*pCnt, const char* s)
 	}
 }
 
+/* Function:   printf_handle_fmt_d
+ * Purpose:    to append an integer value in decimal representation to printf's
+ *             buffer. Helper function for printf.
+ * Parameters: buffer: Pointer to the destination buffer
+ *             pCnt:   Pointer to the variable maintaining the current character
+ *                     count in the destination buffer.
+ *             val:    The integer value */
+static void printf_handle_fmt_d(char* buffer, int* pCnt, int val)
+{
+	int significance = 1000000000;
+
+	/* Signum */
+	if (val < 0)
+	{
+		if (*pCnt < PRINTF_MAX_LENGTH)
+		{
+			buffer[(*pCnt)++] = '-';
+		}
+		else
+		{
+			return;
+		}
+	}
+
+	bool leading_zero = true;
+
+	/* Number */
+	while (significance > 0)
+	{
+		int digit = val / significance;
+		if (digit < 0)
+			digit *= -1;
+
+		if (digit != 0 || !leading_zero || significance == 1)
+		{
+			digit += '0';
+			leading_zero = false;
+
+			if (*pCnt < PRINTF_MAX_LENGTH)
+				buffer[(*pCnt)++] = (char) digit & 0xFF;
+			else
+				return;
+		}
+
+		val %= significance;
+		significance /= 10;
+	}
+}
+
 /* Function:   printf_handle_fmt_spec
  * Purpose:    to handle a format specifier, helper function for printf
  * Parameters: buffer: Pointer to the destination buffer
@@ -176,6 +226,10 @@ static void printf_handle_fmt_spec(
 
 		case 's':
 			printf_handle_fmt_s(buffer, pCnt, va_arg(*argpp, const char*));
+			break;
+
+		case 'd':
+			printf_handle_fmt_d(buffer, pCnt, va_arg(*argpp, int));
 			break;
 
 		case '%':

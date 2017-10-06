@@ -133,6 +133,47 @@ __attribute__((cdecl)) void c_MemoryManagement_free(void* pmem)
 	}
 }
 
+/* Function:   MemoryManagement_getTotalMemory
+ * Purpose:    to query the amount of total available memory (sum of free and
+ *             occupied. Useful for statistics.
+ * Atomicity:  Called from assembly wrapper
+ * Parameters: None.
+ * Returns:    The total amount of available memory. */
+__attribute__((cdecl)) uint32_t c_MemoryManagement_getTotalMemory(void)
+{
+	uint32_t size = 0;
+	MemoryManagement_regionHeader* r = MemoryManagement_base;
+
+	while (r)
+	{
+		size += r->size;
+		r = r->next;
+	}
+
+	return size;
+}
+
+/* Function:   MemoryManagement_getFreeMemory
+ * Purpose:    to query the amount of free memory. Useful for statistics.
+ * Atomicity:  Called from assembly wrapper
+ * Parameters: None.
+ * Returns:    The amount of free memory. */
+__attribute__((cdecl)) uint32_t c_MemoryManagement_getFreeMemory(void)
+{
+	uint32_t size = 0;
+	MemoryManagement_regionHeader* r = MemoryManagement_base;
+
+	while (r)
+	{
+		if (r->type == MEMORY_MANAGEMENT_REGION_FREE)
+			size += r->size;
+
+		r = r->next;
+	}
+
+	return size;
+}
+
 /* Function:   MemoryManagement_addRegion
  * Purpose:    to add a region of free memory to the pool of available.
  *             A base address of 0 is not allowed to have a value for invalid

@@ -106,3 +106,51 @@ MemoryManagement_print:
 
 	pop ebp
 	ret
+
+global MemoryManagement_getTotalMemory
+MemoryManagement_getTotalMemory:
+	push ebp
+	mov ebp, esp
+
+	; Push EFLAGS and disable interrupts
+	pushfd
+	cli
+
+	; Stack alignment: 2 push and call, 4 bytes missing
+	sub esp, 4
+
+	extern c_MemoryManagement_getTotalMemory
+	call c_MemoryManagement_getTotalMemory
+
+	; Clean stack
+	add esp, 4
+
+	; Restore EFLAGS
+	popfd
+
+	pop ebp
+	ret
+
+global MemoryManagement_getFreeMemory
+MemoryManagement_getFreeMemory:
+	push ebp
+	mov ebp, esp
+
+	; Push EFLAGS and disable interrupts
+	pushfd
+	cli
+
+	; Stack alignment: 2 push and call, 4 bytes missing
+	sub esp, 4
+
+	extern c_MemoryManagement_getFreeMemory
+	call c_MemoryManagement_getFreeMemory
+
+	; Clean stack
+	add esp, 4
+
+	; Restore EFLAGS
+	popfd
+
+	pop ebp
+	ret

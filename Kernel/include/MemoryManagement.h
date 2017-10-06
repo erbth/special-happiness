@@ -30,6 +30,8 @@ struct _MemoryManagement_regionHeader
 
 extern __attribute__((cdecl)) void* MemoryManagement_allocate(size_t size);
 extern __attribute__((cdecl)) void MemoryManagement_free(void* pmem);
+extern __attribute__((cdecl)) uint32_t MemoryManagement_getTotalMemory(void);
+extern __attribute__((cdecl)) uint32_t MemoryManagement_getFreeMemory(void);
 extern __attribute__((cdecl)) void MemoryManagement_addRegion(uint32_t base, uint32_t size);
 void MemoryManagement_addFromSMAP(void);
 extern __attribute__((cdecl)) void MemoryManagement_print(void);

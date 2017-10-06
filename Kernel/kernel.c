@@ -35,39 +35,11 @@ void kernel_main (void) {
 	/* Add SMAP free regions to MemoryManagement */
 	MemoryManagement_addFromSMAP();
 
-	/* MemoryManagement */
-	char* test1 = kmalloc(100);
-	if (!test1)
-	{
-		printf("Allocating test1 failed\n");
-		return;
-	}
-
-	char* test2 = kmalloc(100);
-	if (!test2)
-	{
-		printf("Allocating test2 failed\n");
-		return;
-	}
-
-	char* test3 = kmalloc(100);
-	if (!test3)
-	{
-		printf("Allocating test3 failed\n");
-		return;
-	}
-
-	MemoryManagement_print();
-	printf("test1: %p, test2: %p, test3: %p\n", test1, test2, test3);
-
-	kfree(test1);
-	MemoryManagement_print();
-
-	kfree(test2);
-	MemoryManagement_print();
-
-	kfree(test3);
-	MemoryManagement_print();
+	/* Print available memory */
+	printf("Memory: %d Mibi Bytes total, %d/%d bytes used.\n",
+		(int) (MemoryManagement_getTotalMemory() / (1024.0 * 1024)),
+		MemoryManagement_getTotalMemory() - MemoryManagement_getFreeMemory(),
+		MemoryManagement_getTotalMemory());
 
 #if 0
 	/* PnP detect cards */
