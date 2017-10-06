@@ -28,8 +28,8 @@ loader_stage1_start:
 	mov [floppy.SectorsPerTrack], cl
 
 	; load blocks containing stage 2
-	mov cx, (STAGE2_SIZE + 1FFh) / 200h  ; compute blocks to load
-	                                     ; STAGE2_SIZE is defined on commandline after
+	mov cx, (STAGE2_LOADABLE_SIZE + 1FFh) / 200h  ; compute blocks to load
+	                                     ; STAGE2_LOADABLE_SIZE is defined on commandline after
 	                                     ; stage 2 is linked.
 
 	or cx,cx

@@ -8,7 +8,7 @@ TARGET=Loader
 STAGE1=Stage1
 STAGE2=Stage2
 
-NFLAGS:=-f elf -I $(OBJ_DIR)/
+NFLAGS:=-f elf -F dwarf -I $(OBJ_DIR)/
 
 # Order matters!
 BINARY_COMPONENTS=$(STAGE1).o $(STAGE2).o
@@ -24,10 +24,10 @@ STAGE2_OBJ=Loader_stage2.o \
 		   Loader_SystemMemoryMap32.o
 
 .PHONY: all
-all: $(OBJ_DIR) $(OBJ_DIR)/$(TARGET).bin
+all: $(OBJ_DIR) $(OBJ_DIR)/$(TARGET).o
 
-$(OBJ_DIR)/$(TARGET).bin: $(BINARY_COMPONENTS:%=$(OBJ_DIR)/%)
-	$(LD) -T flat_binary_align512.lds -o $@ $^
+$(OBJ_DIR)/$(TARGET).o: $(BINARY_COMPONENTS:%=$(OBJ_DIR)/%)
+	$(LD) -T object_module_align512.lds -r -d -o $@ $^
 
 $(OBJ_DIR)/$(STAGE1).o: $(STAGE1_OBJ:%=$(OBJ_DIR)/%)
 	$(LD) -T intermediate_align512.lds -r -o $@ $^
@@ -36,7 +36,7 @@ $(OBJ_DIR)/$(STAGE2).o: $(STAGE2_OBJ:%=$(OBJ_DIR)/%)
 	$(LD) -T intermediate.lds -r -o $@ $^
 
 $(OBJ_DIR)/Loader_stage1.o: Loader_stage1.asm $(OBJ_DIR)/$(STAGE2).o
-	$(NASM) $(NFLAGS) -dSTAGE2_SIZE=$(shell $(SIZE) $(OBJ_DIR)/$(STAGE2).o|$(AWK) 'NR==2{print $$1+$$2+$$3}') -o $@ $<
+	$(NASM) $(NFLAGS) -dSTAGE2_LOADABLE_SIZE=$(shell $(SIZE) $(OBJ_DIR)/$(STAGE2).o|$(AWK) 'NR==2{print $$1+$$2}') -o $@ $<
 
 $(OBJ_DIR)/%.inc: %.h
 	$(HTOINC) $< $@

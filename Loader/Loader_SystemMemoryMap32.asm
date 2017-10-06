@@ -22,8 +22,8 @@ SYSTEM_MEMORY_MAP_ENTRY_SIZE equ 28
 ; Purpose:    Initialize the memory map. Must be called before any other
 ;             function of this module. Fully CPU state preserving.
 ; Parameters: None.
-global g_SystemMemoryMap_init
-g_SystemMemoryMap_init:
+global p_SystemMemoryMap_init
+p_SystemMemoryMap_init:
 	push eax
 
 	xor eax, eax
@@ -40,8 +40,8 @@ g_SystemMemoryMap_init:
 ;             ESI     [IN]: One of SYSTEM_MEMORY_MAP_ENTRY_* describing the
 ;                           new entry (be CAREFUL, not checked !)
 ; Returns:    CARRY:        Set on error, cleared on success
-global g_SystemMemoryMap_add
-g_SystemMemoryMap_add:
+global p_SystemMemoryMap_add
+p_SystemMemoryMap_add:
 	push eax
 	push ebx
 	push ecx

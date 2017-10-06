@@ -1,8 +1,8 @@
 section .text
 bits 32
 
-extern binary_size
-dd binary_size  ; size of the kernel, must be the first dword
+extern kernel_loadable_size
+dd kernel_loadable_size  ; size of the loaded kernel data, must be the first dword
 
 ; extern symbols
 extern kernel_main
@@ -22,6 +22,16 @@ entry_point:
 	; called, but rather check it.
 	test esp, 0Fh
 	jnz .error_stack_alignment
+
+	; Zero .bss
+	extern kernel_bss_start, kernel_bss_size
+	mov edi, kernel_bss_start
+	mov ecx, kernel_bss_size
+	cld
+
+	xor al, al
+
+	rep stosb
 
 	call kernel_main		; the kernel's main function
 

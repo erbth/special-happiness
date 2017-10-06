@@ -58,7 +58,7 @@ entry:
 
 	; Print SMAP
 	call SystemMemoryMap_print
-	call wait_for_key_press
+	; call wait_for_key_press
 
 	; create and load gdt
 	call create_GDT
@@ -720,7 +720,7 @@ TEXT_VIDEO_START equ 0xB8000
 ; extern symbols
 extern floppy_init, floppy_timer, floppy_get_drive_type, floppy_get_reset_count
 extern floppy_get_error_count, floppy_IRQ6_handler, floppy_debug_update
-extern floppy_debug_set, floppy_test, floppy_read_data
+extern floppy_debug_set, floppy_read_data
 
 bits 32
 entry_of_protected_mode:
@@ -774,11 +774,13 @@ entry_of_protected_mode:
 
 	; Read first sector of kernel that contains size information
 	mov al, 0			; drive 0
-	extern text_size
-	mov ebx, text_size		; offset on disk in bytes (aligned to 200h)
+	extern kernel_load_addr
+	mov ebx, kernel_load_addr	; start of Kernel (LMA) on disk in bytes (aligned to 200h)
 	shr ebx, 9			; LBA
 	mov ecx, 1			; sector count
-	mov edi, 0x100000		; 1 MB
+
+	extern kernel_text_start
+	mov edi, kernel_text_start		; Kernel position
 	call floppy_read_data		; read data
 	or eax, eax			; is EAX 0?
 	jnz .floppy_read_error
@@ -786,7 +788,7 @@ entry_of_protected_mode:
 	mov esi, .p_msgOK
 	call p_print_string
 
-	mov ecx, [0x100000]		; read kernel size
+	mov ecx, [kernel_text_start]		; read kernel size
 
 	mov esi, .p_msgKernelSize1	; print kernel size
 	call p_print_string
@@ -822,20 +824,65 @@ entry_of_protected_mode:
 
 .kernel_loaded:
 	; Add Loader to SMAP
+	extern loader_text_start, loader_loadable_size
+	extern loader_bss_start, loader_bss_size
+
+	mov eax, loader_text_start
+	xor ebx, ebx
+	mov ecx, loader_loadable_size
+	xor edx, edx
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_LOADER_TEXT_DATA
+
+	call p_SystemMemoryMap_add
+	jc .smap_add_failed
+
+	mov eax, loader_bss_start
+	xor ebx, ebx
+	mov ecx, loader_bss_size
+	xor edx, edx
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_LOADER_BSS
+
+	call p_SystemMemoryMap_add
+	jc .smap_add_failed
 
 	; Add Kernel to SMAP
+	extern kernel_text_start, kernel_loadable_size
+	extern kernel_bss_start, kernel_bss_size
 
-	; Add Common to SMAP
+	mov eax, kernel_text_start
+	xor ebx, ebx
+	mov ecx, kernel_loadable_size
+	xor edx, edx
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_KERNEL_TEXT_DATA
 
-	; Print SMAP
-	call p_SystemMemoryMap_print
+	call p_SystemMemoryMap_add
+	jc .smap_add_failed
 
-	; end execution here for now
-	jmp .end
+	mov eax, kernel_bss_start
+	xor ebx, ebx
+	mov ecx, kernel_bss_size
+	xor edx, edx
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_KERNEL_BSS
+
+	call p_SystemMemoryMap_add
+	jc .smap_add_failed
+
+	; Add stack to SMAP, treat as loader bss because it's set up by the loader
+	; and not initialized.
+	mov eax, 0x500
+	xor ebx, ebx
+	mov ecx, 0x7c00 - 0x500
+	xor edx, edx
+	mov esi, SYSTEM_MEMORY_MAP_ENTRY_LOADER_BSS
+
+	call p_SystemMemoryMap_add
+	jc .smap_add_failed
 
 	; Transfer control
 	mov esi, .p_msgKernelExecution
 	call p_print_string
+
+	jmp .transfer
 
 	mov ecx, 5
 
@@ -850,17 +897,23 @@ entry_of_protected_mode:
 	call sleep
 	loop .wait_transfer, ecx
 
+.transfer:
 	mov al, 0FFh			; disable interrupts
 	out 0x21, al			; write to primary PIC
 	out 0xA1, al			; write to secondary PIC
 
-	jmp 0x100004			; Kernel's entry point
+	jmp kernel_text_start + 4	; Kernel's entry point
 
 .end:
 	hlt
 	jmp .end
 
 ; error handlers
+.smap_add_failed:
+	mov esi, .p_msgSMAPAddFailed
+	call p_print_string
+	jmp .end
+
 .floppy_failed:
 	mov esi, .p_msgFailed  ; print error message
 	call p_print_string
@@ -915,6 +968,7 @@ entry_of_protected_mode:
 .p_msgKernelSize2 db 'h bytes', 0x0D, 0x0A, 0
 .p_msgKernelTooLarge db 'The Kernel is too large to fit below the ISA memory hole.', 0x0D, 0x0A, 0
 .p_msgKernelExecution db 'Transfering execution to the kernel in:', 0x0D, 0x0A, 0
+.p_msgSMAPAddFailed db 'Failed to add an entry to the SMAP.', 0x0D, 0x0A, 0
 p_msgCRLF db 0x0D, 0x0A, 0
 
 

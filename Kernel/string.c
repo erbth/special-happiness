@@ -66,3 +66,16 @@ char * strcpy(char *dest, const char *src)
 
 	return dest;
 }
+
+
+/* Function:   strlen
+ * Purpose:    to examine the length of a zero terminated (C) string.
+ * Parameters: str: The string
+ * Returns:    The length of the string */
+size_t strlen (const char* str) {
+	size_t len = 0;
+	while (str[len]) {
+		len++;
+	}
+	return len;
+}

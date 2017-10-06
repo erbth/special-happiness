@@ -19,6 +19,11 @@ static inline uint8_t inb (uint16_t port) {
 	return ret;
 }
 
+static inline void kHUP (void)
+{
+	asm volatile ( "end_%=:\n\thlt\n\tjmp end_%=" : );
+}
+
 // terminal
 void terminal_putchar (char c);
 void terminal_writestring (const char* data);
