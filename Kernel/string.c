@@ -49,6 +49,18 @@ int memcmp(const void *s1, const void *s2, size_t n)
 }
 
 
+/* Function:   bzero
+ * Purpose:    to zero a contiguous region of memory, typically used to
+ *             initialize e newly allocated structure to 0.
+ * Parameters: s [IN]: Pointer to the memory region
+ *             n:      Size of the region.
+ * Returns:    Nothing. */
+void bzero(void *s, size_t n)
+{
+	memset(s, 0, n);
+}
+
+
 /* Function:   strcpy
  * Purpose:    to copy zero terminated strings like traditional strcpy
  * Parameters: dest [OUT]: destinaiton buffer

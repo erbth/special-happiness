@@ -2,11 +2,14 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "stdio.h"
-#include "string.h"
-#include "Kernel_SystemMemoryMap.h"
-#include "isapnp.h"
-#include "NE2000.h"
+#include <stdio.h>
+#include "util.h"
+#include <string.h>
+#include <Kernel_SystemMemoryMap.h>
+#include <isapnp.h>
+#include <NE2000.h>
+#include <isabus.h>
+#include <isr_handlers.h>
 
 /* Check if the compiler thinks we are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -36,12 +39,8 @@ void kernel_main (void) {
 	MemoryManagement_addFromSMAP();
 
 	/* Print available memory */
-	printf("Memory: %d Mibi Bytes total, %d/%d bytes used.\n",
-		(int) (MemoryManagement_getTotalMemory() / (1024.0 * 1024)),
-		MemoryManagement_getTotalMemory() - MemoryManagement_getFreeMemory(),
-		MemoryManagement_getTotalMemory());
+	kernel_print_memory_info();
 
-#if 0
 	/* PnP detect cards */
 	if (isapnp_detect_configure())
 	{
@@ -53,6 +52,24 @@ void kernel_main (void) {
 	}
 
 	/* have fun */
-	NE2000_initialize();
-#endif
+	isabus_device* ne_isa = kmalloc(sizeof(isabus_device));
+	if (ne_isa)
+	{
+		ne_isa->iobase = 0x280;
+		ne_isa->irq = 5;
+		NE2000* ne = NE2000_initialize(ne_isa);
+		if (ne)
+		{
+			printf("NE2000 sucessfully initialized.\n");
+			NE2000_print_state(ne);
+		}
+		else
+		{
+			printf("NE2000 initialization failed.\n");
+		}
+	}
+	else
+	{
+		printf("Failed to allocate memory for isabus_device.\n");
+	}
 }

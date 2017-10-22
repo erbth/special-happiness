@@ -3,8 +3,8 @@
  *     http://download.microsoft.com/download/1/6/1/161ba512-40e2-4cc9-843a-923143f3456c/PNPISA.rtf */
 
 #include <stdint.h>
-#include "isapnp.h"
-#include "io.h"
+#include <isapnp.h>
+#include <io.h>
 #include <string.h>
 #include <util.h>
 

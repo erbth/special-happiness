@@ -282,6 +282,7 @@ create_IDT:
 
 ; The IDT
 align 8, db 0
+global IDT, IDT_SIZE
 IDT times 8*256 db 0
 IDT_SIZE equ $-IDT
 
