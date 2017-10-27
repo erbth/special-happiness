@@ -58,7 +58,7 @@ DOR		equ 0x3F2
 TDR		equ 0x3F3
 MSR		equ 0x3F4  ; read only
 DSR		equ 0x3F4  ; write only
-FIFO		equ 0x3F5
+FIFO	equ 0x3F5
 DIR		equ 0x3F7  ; read only
 CCR		equ 0x3F7  ; write only
 
@@ -97,7 +97,7 @@ floppy_init:
 	test al, 10h			; query the CMD BSY flag
 	jnz .not_idle			; return if the controller is busy
 
-	call floppy_disable_interrupt	; make sure interrupt is disabled
+	call floppy_enable_interrupt	; make sure interrupt is disabled
 	call floppy_wait_IRQ6_start	; wait for previous interrupt
 
 	in al, 0x21			; read master PIT's mask register
@@ -109,6 +109,7 @@ floppy_init:
 	call floppy_wait_IRQ6_end
 
 	call floppy_reset		; perform reset
+	jmp .end
 
 	call floppy_cmd_version		; issue a version command
 	cmp ax, 90h			; is it a 82077AA or compatible?
@@ -1092,7 +1093,7 @@ floppy_select_drive:
 	mov al, [.params_srt+ebx-1]	; SRT
 	mov ah, [.params_hlt+ebx-1]	; HLT
 	mov bl, [.params_hut+ebx-1]	; HUT
-	mov bh, 1			; PIO mode
+	mov bh, 0			; DMA mode
 
 	call floppy_cmd_specify		; issue Specify command
 	or al, al			; is AL 0?
