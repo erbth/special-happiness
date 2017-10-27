@@ -769,10 +769,6 @@ entry_of_protected_mode:
 
 	call .floppy_info  ; print some information
 
-.tree:
-	hlt
-	jmp .tree
-
 	mov esi, .p_msgFloppyReading
 	call p_print_string
 
