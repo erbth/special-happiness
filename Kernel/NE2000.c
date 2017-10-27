@@ -63,8 +63,8 @@ NE2000* NE2000_initialize(isabus_device* isadev)
 	// Page 1
 	NE2000_select_page(ne, 1);
 
-	// Command: Complete DMA, stop
-	outb(iobase, (1 << 5) | 1 | ne->page << 6);
+	// Command: Complete DMA
+	outb(iobase, (1 << 5) | 2 | ne->page << 6);
 
 	printf("NE2000: MAC address: ");
 
@@ -86,9 +86,12 @@ NE2000* NE2000_initialize(isabus_device* isadev)
 	outb(iobase + NE_PSTART_W, 0x40);
 	outb(iobase + NE_PSTOP_W, 0x60);
 	outb(iobase + NE_BNRY_W, 0x40);
+
+	NE2000_select_page(ne, 1);
 	outb(iobase + NE_CURR_W, 0x40);
 
 	/* Enable all interrupts */
+	NE2000_select_page(ne, 0);
 	outb(iobase + NE_ISR_W, 0x7F);
 	outb(iobase + NE_IMR_W, 0x7F);
 
@@ -117,8 +120,17 @@ NE2000* NE2000_initialize(isabus_device* isadev)
  * Returns:    Nothing. */
 __attribute__((cdecl)) void c_NE2000_isr_handler(void)
 {
+	NE2000* ne = global_ne;
+	uint16_t iobase = ne->isadev->iobase;
+
 	printf("NE2000: interrupt happened.\n");
-	NE2000_print_state(global_ne);
+	NE2000_print_state(ne);
+
+	/* Clear ISR */
+	NE2000_select_page(ne, 0);
+	int isr = inb(iobase + NE_ISR_R);
+	isr &= isr;
+	outb(iobase + NE_ISR_W, isr);
 }
 
 /* Function:   NE2000_select_page
@@ -130,7 +142,11 @@ __attribute__((cdecl)) void c_NE2000_isr_handler(void)
 void NE2000_select_page(NE2000* ne, uint8_t page)
 {
 	if (ne->page != page)
+	{
 		ne->page = page > 2 ? 0 : page;
+		outb(ne->isadev->iobase + NE_CR_W,
+			(inb(ne->isadev->iobase + NE_CR_R) & 0x3F) | page << 6);
+	}
 }
 
 /* Function:   NE2000_print_state
@@ -150,8 +166,11 @@ void NE2000_print_state(NE2000* ne)
 
 	NE2000_select_page(ne, 0);
 	int boundary = inb(iobase + NE_BNRY_R);
+	int isr = inb(iobase + NE_ISR_R);
 
 	printf("********************************* NE2000 state ********************************\n");
 	printf("PSTART: 0x%x\nPSTOP: 0x%x\nBoundary: 0x%x\nCurrent: 0x%x\n",
 		pstart, pstop, boundary, current);
+
+	printf("ISR: 0x%x\n", isr);
 }

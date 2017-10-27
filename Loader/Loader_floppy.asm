@@ -98,7 +98,7 @@ floppy_init:
 	jnz .not_idle			; return if the controller is busy
 
 	call floppy_disable_interrupt	; make sure interrupt is disabled
-	call floppy_wait_IRQ6_start	; wait for foreign interrupt
+	call floppy_wait_IRQ6_start	; wait for previous interrupt
 
 	in al, 0x21			; read master PIT's mask register
 	and al, ~(1 << 6)		; enable IRQ 6

@@ -8,6 +8,7 @@ export AWK=awk
 export CAT=cat
 export DD=dd
 export SUDO=sudo
+export QEMU=qemu-system-i386
 
 export FD=/dev/fd0
 
@@ -16,7 +17,7 @@ SUBDIR_IMAGE=Image
 
 SUBDIRS=$(SUBDIRS_COMPONENTS) $(SUBDIR_IMAGE)
 
-.PHONY: all $(SUBDIRS) floppy clean $(SUBDIRS:%=%-clean)
+.PHONY: all $(SUBDIRS) floppy clean $(SUBDIRS:%=%-clean) qemu
 
 all: $(SUBDIRS)
 
@@ -33,3 +34,6 @@ $(SUBDIRS:%=%-clean):
 
 floppy: $(SUBDIR_IMAGE)
 	$(MAKE) -C $(SUBDIR_IMAGE) floppy
+
+qemu: $(SUBDIR_IMAGE)
+	$(QEMU) -fda $(OBJ_BASE)/$(SUBDIR_IMAGE)/MyOS.bin

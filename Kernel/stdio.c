@@ -11,6 +11,7 @@
 
 /* Static prototypes */
 static void terminal_newline(void);
+static void terminal_carriagereturn(void);
 
 
 /* Function:   printf_handle_fmt_hex32
@@ -332,6 +333,10 @@ void terminal_putchar (char c) {
 	{
 		terminal_newline();
 	}
+	else if (c == '\r')
+	{
+		terminal_carriagereturn();
+	}
 	else
 	{
 		terminal_putentryat (c, terminal_color, terminal_column, terminal_row);
@@ -401,4 +406,9 @@ static void terminal_newline(void)
 		for (uint8_t x = 0; x < VGA_WIDTH; x++)
 			terminal_putentryat(' ', terminal_color, x, VGA_HEIGHT - 1);
 	}
+}
+
+static void terminal_carriagereturn(void)
+{
+	terminal_column = 0;
 }
