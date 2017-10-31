@@ -20,6 +20,10 @@ OBJS= Entry.asm.o \
 	  isapnp.c.o \
 	  NE2000.c.o \
 	  NE2000.asm.o \
+	  LinkedList.c.o \
+	  LinkedQueue.c.o \
+	  LinkedQueue.asm.o \
+	  ethernet.c.o \
       Text.asm.o
 
 .PHONY: all
