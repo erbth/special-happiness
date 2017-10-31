@@ -24,6 +24,8 @@ OBJS= Entry.asm.o \
 	  LinkedQueue.c.o \
 	  LinkedQueue.asm.o \
 	  ethernet.c.o \
+	  layer3.c.o \
+	  ARP.c.o \
       Text.asm.o
 
 .PHONY: all

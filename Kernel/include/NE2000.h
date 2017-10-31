@@ -3,11 +3,13 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "ethernet.h"
 #include "NE2000_internal.h"
 
 /* Prototypes */
 NE2000* NE2000_initialize(isabus_device* isadev);
 void NE2000_print_state(NE2000* ne);
 void NE2000_debuggerloop(NE2000* ne);
+ethernet2_packet* NE2000_next_packet(NE2000* ne);
 
 #endif /* _NE2000_H */

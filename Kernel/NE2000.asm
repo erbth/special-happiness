@@ -14,6 +14,7 @@ NE2000_isr_handler:
 	push eax
 	push ecx
 	push edx
+	pushfd
 
 	extern c_NE2000_isr_handler
 
@@ -24,6 +25,7 @@ NE2000_isr_handler:
 	mov al, 20h		; Signal EOI
 	out 0x20, al
 
+	popfd
 	pop edx
 	pop ecx
 	pop eax

@@ -128,30 +128,21 @@ __attribute__((cdecl)) void c_NE2000_isr_handler(void)
 	NE2000* ne = global_ne;
 	uint16_t iobase = ne->isadev->iobase;
 
-	printf("NE2000: interrupt happened.\n");
-	NE2000_print_state(ne);
+	// printf("NE2000: interrupt happened.\n");
+	// NE2000_print_state(ne);
 
 	/* Fetch packet(s) from card buffer */
 	while (ne->next__pkt != NE2000_current_read(ne))
 	{
-		printf("Fetching one packet from card.\n");
-
 		NE2000_remoteStartAddress_write(ne, ne->next__pkt << 8);
 		NE2000_remoteByteCount_write(ne, 4);
 		NE2000_remoteDMA_read(ne);
 
 		uint16_t tmp = inw(iobase + NE_FIFO);
-		uint8_t recvState = tmp & 0xFF;
+		// uint8_t recvState = tmp & 0xFF;
 		ne->next__pkt = (tmp >> 8) & 0xFF;
 
 		uint16_t recvCnt = inw(iobase + NE_FIFO);
-
-		printf("State: %x, next: %d, recvCnt: %d\n",
-			(int) recvState,
-			(int) ne->next__pkt,
-			(int) recvCnt);
-
-		printf("Allocating a new packet-meta-structure: ");
 
 		if (recvCnt >= 64)
 		{
@@ -163,24 +154,19 @@ __attribute__((cdecl)) void c_NE2000_isr_handler(void)
 				/* We don't need the CRC, the card already checked it. */
 				pkt->dataSize = recvCnt - (6 + 6 + 2 + 4);
 
-				printf ("[ OK ]\nAllocating buffer: ");
 				pkt->data = kmalloc(pkt->dataSize);
 				if (pkt->data)
 				{
-					printf("[ OK ]\n");
-
 					/* Destination MAC address */
 					for (uint8_t i = 0; i < 3; i++)
 					{
-						((uint16_t*) pkt->macDestination)[i] =
-							ethernet_ntohs(inw(iobase + NE_FIFO));
+						((uint16_t*) pkt->macDestination)[i] = inw(iobase + NE_FIFO);
 					}
 
 					/* Source MAC address */
 					for (uint8_t i = 0; i < 3; i++)
 					{
-						((uint16_t*) pkt->macSource)[i] =
-							ethernet_ntohs(inw(iobase + NE_FIFO));
+						((uint16_t*) pkt->macSource)[i] = inw(iobase + NE_FIFO);
 					}
 
 
@@ -190,8 +176,7 @@ __attribute__((cdecl)) void c_NE2000_isr_handler(void)
 					{
 						for (uint16_t i = 0; i < pkt->dataSize / 2; i++)
 						{
-							((uint16_t*) pkt->data)[i] =
-								ethernet_ntohs(inw(iobase + NE_FIFO));
+							((uint16_t*) pkt->data)[i] = inw(iobase + NE_FIFO);
 						}
 
 						/* Odd packet length */
@@ -201,15 +186,11 @@ __attribute__((cdecl)) void c_NE2000_isr_handler(void)
 						}
 
 						/* Enqueue the packet. */
-						printf("Enqueuing packet: ");
-						if (LinkedQueue_enqueue(ne->recvQueue, pkt) == 0)
+						if (LinkedQueue_enqueue(ne->recvQueue, pkt) < 0)
 						{
-							printf("[ OK ]\n");
-							printf ("Queue size: %d\n", (int) LinkedQueue_getSize(ne->recvQueue));
-						}
-						else
-						{
-							printf("[FAIL]\n");
+							kfree (pkt->data);
+							kfree(pkt);
+							printf ("NE2000: Enqueuing packet failed.\n");
 						}
 					}
 					else
@@ -223,12 +204,12 @@ __attribute__((cdecl)) void c_NE2000_isr_handler(void)
 				else
 				{
 					kfree(pkt);
-					printf("[FAIL]\n");
+					printf("NE2000: Allocating buffer for packet data failed.\n");
 				}
 			}
 			else
 			{
-				printf("[FAIL]");
+				printf("NE2000: Allocating packet meta-data-structure failed.\n");
 			}
 		}
 		else
@@ -247,6 +228,29 @@ __attribute__((cdecl)) void c_NE2000_isr_handler(void)
 	int isr = inb(iobase + NE_ISR_R);
 	isr &= isr;
 	outb(iobase + NE_ISR_W, isr);
+}
+
+/* Function:   NE2000_next_packet
+ * Purpose:    to retrieve the next packet from the queue. If the queue is
+ *             empty, this function blocks until a packet gets enqueued.
+ * Parameters: ne [IN]: A pointer to the NE2000 driver's context structure.
+ * Returns:    A pointer to the retrieved packet or NULL in case of failure. */
+ethernet2_packet* NE2000_next_packet(NE2000* ne)
+{
+	if (ne && ne->recvQueue)
+	{
+		for (;;)
+		{
+			ethernet2_packet* pkt = (ethernet2_packet*) LinkedQueue_dequeue(ne->recvQueue);
+			if (pkt)
+			{
+				return pkt;
+			}
+
+			kHLT();
+		}
+	}
+	return NULL;
 }
 
 /* Function:   NE2000_select_page

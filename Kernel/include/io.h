@@ -30,6 +30,11 @@ static inline void kHUP (void)
 	asm volatile ( "end_%=:\n\thlt\n\tjmp end_%=" : );
 }
 
+static inline void kHLT(void)
+{
+	asm volatile ( "hlt" : );
+}
+
 // terminal
 void terminal_putchar (char c);
 void terminal_writestring (const char* data);
