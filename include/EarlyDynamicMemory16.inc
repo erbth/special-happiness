@@ -1,5 +1,7 @@
-%ifndef LOADER_EARLY_DYNAMIC_MEMORY_16_INC
-%define LOADER_EARLY_DYNAMIC_MEMORY_16_INC
+%ifndef EARLY_DYNAMIC_MEMORY_16_INC
+%define EARLY_DYNAMIC_MEMORY_16_INC
+
+%include "EarlyDynamicMemory.inc"
 
 extern EarlyDynamicMemory_init
 extern EarlyDynamicMemory_allocate

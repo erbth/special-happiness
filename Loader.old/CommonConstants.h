@@ -16,10 +16,5 @@
 #define SYSTEM_MEMORY_MAP_ENTRY_LOADER_BSS 			0x00000008
 #define SYSTEM_MEMORY_MAP_ENTRY_FREE				0x00000009
 
-// Size of physical memory for early dynamically allocatable memory
-#define EARLY_DYNAMIC_MEMORY_SIZE 16384
-
-// Bitmasks for early memory manager memory header flags
-#define EARLY_DYNAMIC_MEMORY_HEADER_OCCUPIED	0x00000001
 
 #endif /* COMMON_CONSTANTS_H */

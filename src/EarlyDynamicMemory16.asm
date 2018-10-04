@@ -1,11 +1,20 @@
 ; 16 bit version of the Memory manager that supplies dynamically allocatable
 ; memory during early boot phase. The physical memory is allocated in
-; CommonlyUsedData.asm
+; in this module.
 
-%include "CommonConstants.inc"
-%include "CommonlyUsedData.inc"
-%include "Loader_console.inc"
+%include "EarlyDynamicMemory.inc"
+%include "EarlyConsole.inc"
 
+section .bss
+; Physical memory used for early dynamically allocated memory
+global early_dynamic_memory
+early_dynamic_memory resb EARLY_DYNAMIC_MEMORY_SIZE
+
+; Address of System Memory Map
+global system_memory_map
+system_memory_map resd 1
+
+section .text
 bits 16
 
 ; Structure of a memory header:
@@ -15,7 +24,7 @@ bits 16
 ; 0x0C	flags		32 bit
 ;
 ; flags is a combination of EARLY_MEMORY_HEADER_* bitmasks defined in
-; CommonConstants.h
+; EarlyDynamicMemory.inc
 EARLY_DYNAMIC_MEMORY_HEADER_SIZE equ 16
 
 ; Function:   EarlyDynamicMemory_init

@@ -1,11 +1,12 @@
-; 16 bit version of the Memory manager that supplies dynamically allocatable
+; 32 bit version of the Memory manager that supplies dynamically allocatable
 ; memory during early boot phase. The physical memory is allocated in
-; CommonlyUsedData.asm
+; EarlyDynamicMemory16.asm
 
-%include "CommonConstants.inc"
-%include "CommonlyUsedData.inc"
-%include "Loader_console.inc"
+%include "EarlyDynamicMemory.inc"
 
+extern early_dynamic_memory
+
+section .text
 bits 32
 
 ; Structure of a memory header:

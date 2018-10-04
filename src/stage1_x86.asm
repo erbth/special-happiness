@@ -27,26 +27,30 @@ loader_stage1_start:
 	mov [floppy.NumberOfHeads], dh
 	mov [floppy.SectorsPerTrack], cl
 
-	; load blocks containing stage 2
-	mov cx, (STAGE2_LOADABLE_SIZE + 1FFh) / 200h  ; compute blocks to load
-	                                     ; STAGE2_LOADABLE_SIZE is defined on commandline after
-	                                     ; stage 2 is linked.
-
-	or cx,cx
-	jz .stage2zero   ; if stage 2 size is zero, there's nothing to load.
-
+	; Load first block of stage 2. It contains the count of blocks to load.
 	mov ax, 1
+	mov cx, 1
 	mov dl, 0
 	mov di, 0x7E00
 
-	call drive_read  ; otherwise, read remaining blocks
+	call drive_read
+	jc halt_error
+
+	; The count of blocks is a 16 bit unsigned integer since the BIOS is 16 bit.
+	mov cx, [0x7E00]
+	mov [stage1_load_size_blocks], cx
+	sub cx, 1
+	mov ax, 2
+	mov di, 0x8000
+
+	call drive_read
 	jc halt_error
 
 .done:
 	mov si, msgStage2
 	call print_string
 
-	jmp 0x7E00       ; stage 2
+	jmp 0x7E02       ; stage 2
 
 	jmp halt_error   ; should never be reached
 
@@ -54,9 +58,9 @@ loader_stage1_start:
 	mov si, msgStage2zero
 	call print_string
 
-.loop:
+halt_loop:
 	hlt
-	jmp .loop  ; who knows, maybe SMI will trigger an interrupt
+	jmp halt_loop  ; who knows, maybe SMI will trigger an interrupt
 
 
 ; ===================================
@@ -71,17 +75,20 @@ floppy:
 	.NumberOfHeads db 1
 	.SectorsPerTrack db 1
 
+	global stage1_load_size_blocks
+stage1_load_size_blocks dw 1
+
 
 ; ================
 ; calls start here
-;=================
+; ================
 
 ; print error message and halt
 halt_error:
 	mov si, .msgError
 	call print_string
 	cli
-	hlt  ; halt in case of error
+	jmp halt_loop  ; halt in case of error
 
 .msgError db 'Error.', 0
 
@@ -208,7 +215,13 @@ drive_read:
 
 
 ; SI [IN] = location of zero terminated string to print
+global print_string
 print_string:
+	push ax
+	push bx
+	push si
+
+.char_loop:
 	lodsb		; grab byte from si
 
 	or al, al  ; logical or AL by itself
@@ -217,17 +230,28 @@ print_string:
 	mov ah, 0x0E
 	int 0x10      ; otherwise, print out the character!
 
-	jmp print_string
+	jmp .char_loop
+
 .done:
+	pop si
+	pop bx
+	pop ax
 	ret
 
 ; basically from there: http://wiki.osdev.org/Real_mode_assembly_II,
 ; extended to whole ax
+global print_hex
 print_hex:
+	push ax
+	push bx
+
 	call .byte
 	mov ax, [.temp]
 	xchg al, ah
 	call .byte
+
+	pop bx
+	pop ax
 	ret
 .byte:
 	mov [.temp],ax
@@ -252,6 +276,7 @@ print_hex:
 	ret
 
 .temp dw 0
+
 
 ; prints output from get_drive_geometry,
 ; DL [IN] = number of drives,
@@ -303,4 +328,4 @@ print_drive_geometry:
 
 
 	times 510-($-$$) db 0
-	dw 0AA55h ; some BIOSes require this signature
+	dw 0xAA55 ; some BIOSes require this signature

@@ -1,5 +1,5 @@
-%ifndef LOADER_CONSOLE_INC
-%define LOADER_CONSOLE_INC
+%ifndef EARLY_CONSOLE_INC
+%define EARLY_CONSOLE_INC
 
 extern print_string
 extern print_char
