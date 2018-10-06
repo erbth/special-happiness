@@ -1,11 +1,15 @@
-; Data structure for storing the system memory map
+; Data structure for storing the system memory map, 32 bit version.
+; The pointer to the system memory map is contained in the 16 bit object
+; module.
 
-%include "CommonConstants.inc"
-%include "CommonlyUsedData.inc"
-%include "Loader_EarlyDynamicMemory16.inc"
-%include "Loader_console.inc"
+%include "SystemMemoryMap.inc"
+%include "EarlyDynamicMemory32.inc"
+%include "EarlyConsole32.inc"
 
-bits 16
+extern system_memory_map
+
+section .text
+bits 32
 
 ; System Memory Map entry:
 ; 0x00	previous	32 bit
@@ -22,8 +26,8 @@ SYSTEM_MEMORY_MAP_ENTRY_SIZE equ 28
 ; Purpose:    Initialize the memory map. Must be called before any other
 ;             function of this module. Fully CPU state preserving.
 ; Parameters: None.
-global SystemMemoryMap_init
-SystemMemoryMap_init:
+global p_SystemMemoryMap_init
+p_SystemMemoryMap_init:
 	push eax
 
 	xor eax, eax
@@ -40,8 +44,8 @@ SystemMemoryMap_init:
 ;             ESI     [IN]: One of SYSTEM_MEMORY_MAP_ENTRY_* describing the
 ;                           new entry (be CAREFUL, not checked !)
 ; Returns:    CARRY:        Set on error, cleared on success
-global SystemMemoryMap_add
-SystemMemoryMap_add:
+global p_SystemMemoryMap_add
+p_SystemMemoryMap_add:
 	push eax
 	push ebx
 	push ecx
@@ -62,7 +66,7 @@ SystemMemoryMap_add:
 	push eax
 
 	mov eax, SYSTEM_MEMORY_MAP_ENTRY_SIZE
-	call EarlyDynamicMemory_allocate
+	call p_EarlyDynamicMemory_allocate
 
 	mov edi, eax
 	pop eax
@@ -164,7 +168,7 @@ SystemMemoryMap_add:
 	jnz .main_loop
 
 	; Free memory
-	call EarlyDynamicMemory_free
+	call p_EarlyDynamicMemory_free
 	jc .error
 
 	; Fetch next element
@@ -212,7 +216,7 @@ SystemMemoryMap_add:
 	push eax
 
 	mov eax, ebx
-	call EarlyDynamicMemory_free
+	call p_EarlyDynamicMemory_free
 
 	pop eax
 	jc .error
@@ -280,7 +284,7 @@ SystemMemoryMap_addIntersectingElement:
 	push eax
 
 	mov eax, SYSTEM_MEMORY_MAP_ENTRY_SIZE
-	call EarlyDynamicMemory_allocate
+	call p_EarlyDynamicMemory_allocate
 
 	mov edx, eax
 	pop eax
@@ -537,7 +541,7 @@ SystemMemoryMap_consolidate:
 	push eax
 
 	mov eax, ebx
-	call EarlyDynamicMemory_free
+	call p_EarlyDynamicMemory_free
 
 	pop eax
 
@@ -826,54 +830,54 @@ SystemMemoryMap_pushBack:
 ; Purpose:    to print the memory map for debugging purposes.
 ;             Fully CPU state preserving
 ; Parameters: None.
-global SystemMemoryMap_print
-SystemMemoryMap_print:
+global p_SystemMemoryMap_print
+p_SystemMemoryMap_print:
 	push eax
 	push ebx
-	push si
+	push esi
 
 	; Print info message
-	mov si, .msgInfo
-	call print_string
+	mov esi, .msgInfo
+	call p_print_string
 
 	mov ebx, [system_memory_map]
 
 	; Print list start address
-	mov si, .msgListStart
-	call print_string
+	mov esi, .msgListStart
+	call p_print_string
 
 	mov eax, ebx
-	call print_hex_dword
+	call p_print_hex
 
-	mov si, .msgCrLf
-	call print_string
+	mov esi, .msgCrLf
+	call p_print_string
 
 .print_entry:
 	or ebx, ebx
 	jz .print_end
 
 	; Start
-	mov si, .msgStart
-	call print_string
+	mov esi, .msgStart
+	call p_print_string
 
 	mov eax, [ebx + 0ch + 4]
-	call print_hex_dword
+	call p_print_hex
 
 	mov eax, [ebx + 0ch]
-	call print_hex_dword
+	call p_print_hex
 
 	; Size
-	mov si, .msgSize
-	call print_string
+	mov esi, .msgSize
+	call p_print_string
 
 	mov eax, [ebx + 14h + 4]
-	call print_hex_dword
+	call p_print_hex
 
 	mov eax, [ebx + 14h]
-	call print_hex_dword
+	call p_print_hex
 
-	mov si, .msgSizeEnd
-	call print_string
+	mov esi, .msgSizeEnd
+	call p_print_string
 
 	; Type
 	mov eax, [ebx + 8]
@@ -886,107 +890,107 @@ SystemMemoryMap_print:
 	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_ACPI_RECLAIM
 	je .select_acpi_reclaim
 
-	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_ACPI_NVS
-	je .select_acpi_nvs
-
-	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_LOADER_TEXT_DATA
-	je .select_loader_text_data
-
-	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_LOADER_BSS
-	je .select_loader_bss
-
-	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_KERNEL_TEXT_DATA
-	je .select_kernel_text_data
-
-	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_KERNEL_BSS
-	je .select_kernel_bss
+;	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_ACPI_NVS
+;	je .select_acpi_nvs
+;
+;	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_LOADER_TEXT_DATA
+;	je .select_loader_text_data
+;
+;	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_LOADER_BSS
+;	je .select_loader_bss
+;
+;	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_KERNEL_TEXT_DATA
+;	je .select_kernel_text_data
+;
+;	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_KERNEL_BSS
+;	je .select_kernel_bss
 
 	cmp eax, SYSTEM_MEMORY_MAP_ENTRY_WELL_KNOWN_PC
 	je .select_well_known_pc
 
-	mov si, .msgEntryUndefined
+	mov esi, .msgEntryUndefined
 
 .print_type:
-	call print_string
+	call p_print_string
 
 	; List data
 	; Skip for now ...
 	jmp .print_continue
 
 	; Entry's Address
-	mov si, .msgAddress
-	call print_string
+	mov esi, .msgAddress
+	call p_print_string
 
 	mov eax, ebx
-	call print_hex_dword
+	call p_print_hex
 
 	; Previous entry
-	mov si, .msgPrevious
-	call print_string
+	mov esi, .msgPrevious
+	call p_print_string
 
 	mov eax, [ebx]
-	call print_hex_dword
+	call p_print_hex
 
 	; Next entry
-	mov si, .msgNext
-	call print_string
+	mov esi, .msgNext
+	call p_print_string
 
 	mov eax, [ebx + 4]
-	call print_hex_dword
+	call p_print_hex
 
 .print_continue:
-	mov si, .msgCrLf
-	call print_string
+	mov esi, .msgCrLf
+	call p_print_string
 
 	; Next entry
 	mov ebx, [ebx + 4]
 	jmp .print_entry
 
 .print_end:
-	mov si, .msgEnd
-	call print_string
+	mov esi, .msgEnd
+	call p_print_string
 
 .end:
-	pop si
+	pop esi
 	pop ebx
 	pop eax
 	ret
 
 
 .select_free:
-	mov si, .msgEntryFree
+	mov esi, .msgEntryFree
 	jmp .print_type
 
 .select_reserved:
-	mov si, .msgEntryReserved
+	mov esi, .msgEntryReserved
 	jmp .print_type
 
 .select_acpi_reclaim:
-	mov si, .msgEntryAcpiReclaim
+	mov esi, .msgEntryAcpiReclaim
 	jmp .print_type
 
 .select_acpi_nvs:
-	mov si, .msgEntryAcpiNVS
+	mov esi, .msgEntryAcpiNVS
 	jmp .print_type
 
-.select_loader_text_data:
-	mov si, .msgEntryLoaderTD
-	jmp .print_type
-
-.select_loader_bss:
-	mov si, .msgEntryLoaderBss
-	jmp .print_type
-
-.select_kernel_text_data:
-	mov si, .msgEntryKernelTD
-	jmp .print_type
-
-.select_kernel_bss:
-	mov si, .msgEntryKernelBss
-	jmp .print_type
+; .select_loader_text_data:
+; 	mov esi, .msgEntryLoaderTD
+; 	jmp .print_type
+; 
+; .select_loader_bss:
+; 	mov esi, .msgEntryLoaderBss
+; 	jmp .print_type
+; 
+; .select_kernel_text_data:
+; 	mov esi, .msgEntryKernelTD
+; 	jmp .print_type
+; 
+; .select_kernel_bss:
+; 	mov esi, .msgEntryKernelBss
+; 	jmp .print_type
 
 .select_well_known_pc:
-	mov si, .msgEntryWellKnownPc
+	mov esi, .msgEntryWellKnownPc
 	jmp .print_type
 
 .msgInfo				db '****************************** System Memory Map ******************************', 0dh, 0ah, 0

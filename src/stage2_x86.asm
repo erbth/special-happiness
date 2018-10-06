@@ -1,6 +1,6 @@
 %include "EarlyDynamicMemory16.inc"
-# %include "SystemMemoryMap16.inc"
-# %include "SystemMemoryMap32.inc"
+%include "SystemMemoryMap16.inc"
+%include "SystemMemoryMap32.inc"
 
 section .text
 ; org 0x7E00  ; done by linker
@@ -22,6 +22,9 @@ stage2_x86_asm_entry:
 
 	; Initialize early dynamically allocatable memory
 	call EarlyDynamicMemory_init
+
+	; Initialize System Memory Map
+	call SystemMemoryMap_init
 
 	; Retrieve memory map using int 15h with ax=e820h
 	call retrieve_memory_map_int15
@@ -63,11 +66,6 @@ stage2_x86_asm_entry:
 	; Print SMAP
 	call SystemMemoryMap_print
 
-	mov si, .msgWaitKeypress
-	call print_string
-	call wait_for_key_press
-
-
 	; create and load temporary gdt
 	call create_temporary_GDT
 
@@ -92,6 +90,16 @@ stage2_x86_asm_entry:
 	jmp dword 8h:entry_of_protected_mode ;  all 16 bit code will be invalid from now (until we switch back to real mode)
 
 ; --- Error handlers ---
+.smap_disjoint_error:
+	mov si, .msgErrorSmapDisjoint
+	call print_string
+	jmp .error
+
+.smap_add_error:
+	mov si, .msgErrorSmapAdd
+	call print_string
+	jmp .error
+
 .int15_error:
 	mov si, .msgErrorInt15
 	call print_string
@@ -108,6 +116,8 @@ stage2_x86_asm_entry:
 
 
 ; --- Messages ---
+.msgErrorSmapDisjoint	db 'Failed to make SMAP disjoint', 0dh, 0ah, 0
+.msgErrorSmapAdd		db 'Failed to add an entry to the SMAP', 0dh, 0ah, 0
 .msgErrorInt15			db 'Failed to retrieve the System Memory Map through int 15.', 0dh, 0ah, 0
 .msgErrorA20			db 'Could not open the A20 line.', 0x0D, 0x0A, 0
 .msgPModeSwitch			db 'Switching to protected mode ...', 0x0D, 0x0A, 0

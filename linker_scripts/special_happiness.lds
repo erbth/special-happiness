@@ -37,17 +37,9 @@ SECTIONS
 	/* Align to size of full blocks */
 	. = ALIGN(0x200);
 
-	/* Dynamically loaded sections */
-    .dynamic : {
-        *(.text_dynamic)
-        *(.data_dynamic)
-    } > address_space AT > floppy
-
-    /* uninitialized data, not loaded */
-    .bss_dynamic (NOLOAD) : {
-        *(.bss_dynamic)
-    } > address_space AT > floppy
-
 	/* Remove all other sections */
 	/DISCARD/ : { *(*) }
+
+	/* One address after the whole kernel */
+	kernel_end = .;
 }

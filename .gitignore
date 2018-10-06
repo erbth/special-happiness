@@ -1,2 +1,5 @@
+# Vim's .swp files
+*.swp
+
 # ignore binaries
 bin/

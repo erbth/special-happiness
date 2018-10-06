@@ -10,10 +10,6 @@ section .bss
 global early_dynamic_memory
 early_dynamic_memory resb EARLY_DYNAMIC_MEMORY_SIZE
 
-; Address of System Memory Map
-global system_memory_map
-system_memory_map resd 1
-
 section .text
 bits 16
 
