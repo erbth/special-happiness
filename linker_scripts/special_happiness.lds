@@ -29,6 +29,7 @@ SECTIONS
 
     /* uninitialized data, not loaded */
     .bss_bootstrapped (NOLOAD) : {
+		*(COMMON)
         *(.bss_bootstrapped)
 	} > address_space AT > floppy
 

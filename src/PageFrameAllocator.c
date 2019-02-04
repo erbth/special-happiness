@@ -1,4 +1,5 @@
 #include "PageFrameAllocator.h"
+#include "stdio.h"
 
 void PageFrameAllocator_init_bitmap (PageFrameAllocator *pfa)
 {
@@ -78,4 +79,18 @@ int PageFrameAllocator_check_frames_available (
 	}
 
 	return count == 0 ? 1 : 0;
+}
+
+uint32_t PageFrameAllocator_allocate (PageFrameAllocator *pfa)
+{
+	for (uint32_t i = 0; i < pfa->frame_count; i++)
+	{
+		if ((pfa->bitmap[i / 8] & (1 << (i % 8))) == 0)
+		{
+			PageFrameAllocator_mark_used (pfa, i);
+			return i;
+		}
+	}
+
+	return 0;
 }

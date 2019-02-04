@@ -39,15 +39,20 @@ struct _PageFrameAllocator
 
 /* Functions' and procedures' prototypes */
 void PageFrameAllocator_init_bitmap (PageFrameAllocator *pfa);
-void PageFrameAllocator_mark_used (PageFrameAllocator *pfa, uint32_t frame);
-void PageFrameAllocator_mark_range_free
-	(PageFrameAllocator *pfa, uint32_t first_frame, uint32_t count);
 
+void PageFrameAllocator_mark_used (PageFrameAllocator *pfa, uint32_t frame);
 void PageFrameAllocator_mark_free (PageFrameAllocator *pfa, uint32_t frame);
+
 void PageFrameAllocator_mark_range_used
 	(PageFrameAllocator *pfa, uint32_t first_frame, uint32_t count);
 
+void PageFrameAllocator_mark_range_free
+	(PageFrameAllocator *pfa, uint32_t first_frame, uint32_t count);
+
+
 int PageFrameAllocator_check_frames_available (
 		PageFrameAllocator *pfa, unsigned int count);
+
+uint32_t PageFrameAllocator_allocate (PageFrameAllocator *pfa);
 
 #endif /* PAGE_FRAME_ALLOCATOR_H */

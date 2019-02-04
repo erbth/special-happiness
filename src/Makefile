@@ -9,14 +9,14 @@ export SIZE="/home/therb/opt/cross/bin/i686-elf-size"
 export AWK=awk
 export CAT=cat
 export DD=dd
-export QEMU=qemu-system-i386
+export QEMU=kvm
 export HTOINC:=../tools/htoinc.sh
 export INCTOH:=../tools/inctoh.sh
 
 export FD=/dev/fd0
 
 export NFLAGS:=-f elf -F dwarf -I $(OBJ_DIR)/ -I $(INC_DIR)/
-export CFLAGS:=-ffreestanding -O3 -Wall -Wextra -Werror -Wno-error=unused-parameter -Wno-error=unused-variable -std=gnu11 -fno-asynchronous-unwind-tables -I$(INC_DIR) -I$(OBJ_DIR)
+export CFLAGS:=-ffreestanding -O3 -Wall -Wextra -Werror -Wno-error=unused-parameter -Wno-error=unused-variable -std=gnu11 -fno-asynchronous-unwind-tables -gdwarf -I$(INC_DIR) -I$(OBJ_DIR)
 export LDCFALGS=$(CFLAGS)
 
 OS_OBJECT:=special_happiness.img
@@ -35,7 +35,8 @@ BOOTSTRAPPED_OBJS := \
 	cpu_utils.asm.o \
 	PageFrameAllocator.c.o \
 	SystemMemoryMap.c.o \
-	MemoryAllocator.c.o
+	stdio.c.o \
+	string.c.o
 
 INTERMEDIATE_OBJS := $(STAGE1_OBJECT) $(BOOTSTRAPPED_OBJECT)
 
@@ -69,7 +70,7 @@ floppy: $(OBJ_DIR)/$(OS_OBJECT)
 
 .PHONY: qemu
 qemu: $(OBJ_DIR)/$(OS_OBJECT)
-	$(QEMU) -drive file=$<,format=raw,if=floppy,index=0 -boot a
+	$(QEMU) -drive file=$<,format=raw,if=floppy,index=0 -boot a -curses -m 256 -cpu host
 
 $(OBJ_DIR):
 	mkdir -p $@

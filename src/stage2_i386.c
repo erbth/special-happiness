@@ -3,11 +3,18 @@
 #include "SystemMemoryMap.h"
 #include "PageFrameAllocator.h"
 #include "MemoryAllocator.h"
+#include "stdio.h"
+#include "cpu/msr.h"
 
 /* This file is compiled for a IA32 target. */
 
 __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (SystemMemoryMap mmap)
 {
+	/* Initialize the real console */
+	terminal_initialize ();
+
+	printf ("Hi there, the terminal is initialized now and printf works!\n");
+
 	/* Initialize a page frame allocator */
 	PageFrameAllocator pfa;
 
@@ -21,11 +28,13 @@ __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (Syste
 	/* Round up to full page frames as only those can be allocated so far */
 	pfa.bitmap_size = ((pfa.bitmap_size + pfa.frame_size - 1) / pfa.frame_size) * pfa.frame_size;
 
+	printf ("Memory size: %d MB\n", (int) memory_size / 1024 / 1024);
+
 	/* Figure out a bitmap location */
 	extern uint8_t kernel_end;
 
 	/* Lowest possible bitmap location */
-	uint32_t pfa_bitmap_location = ((intptr_t) &kernel_end + pfa.frame_size - 1) / pfa.frame_size;
+	uint32_t pfa_bitmap_location = ((intptr_t) &kernel_end + pfa.frame_size - 1) & ~(pfa.frame_size - 1);
 
 	do
 	{
@@ -35,11 +44,9 @@ __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (Syste
 
 		while (cm)
 		{
-			if (
-					(pfa_bitmap_location + pfa.bitmap_size > cm->start &&
-					pfa_bitmap_location < cm->start + cm->size) ||
-					(pfa_bitmap_location < cm->start + cm->size &&
-					 pfa_bitmap_location + pfa.bitmap_size > cm->start))
+			if (pfa_bitmap_location + pfa.bitmap_size > cm->start &&
+					pfa_bitmap_location < cm->start + cm->size &&
+					cm->type != SYSTEM_MEMORY_MAP_ENTRY_FREE)
 			{
 				intersection = 1;
 				break;
@@ -59,7 +66,8 @@ __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (Syste
 
 	if (pfa_bitmap_location + pfa.bitmap_size > memory_size)
 	{
-		/* No location for the memory map found. Halt here. */
+		/* No location for the bitmap found. Halt here. */
+		printf ("FATAL: No location for the pfa bitmap found.\n");
 		cpu_halt ();
 	}
 
@@ -83,12 +91,22 @@ __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (Syste
 			pfa.bitmap_size / pfa.frame_size);
 
 	/* Initialize the memory allocator */
-	MemoryAllocator ma;
+	/* MemoryAllocator ma;
 
 	ma.pfa = &pfa;
-	ma.
+	ma. */
 
-	/* Initialize the real console */
+	/* Well, let's have some fun here! */
+	printf ("APIC base: 0x%llx\n", (long long) rdmsr64 (IA32_APIC_BASE));
+
+	printf ("debugctl: 0x%lx\n", (long) rdmsr32 (IA32_DEBUGCTL));
+
+	// uint64_t debugctl = rdmsr64 (IA32_DEBUGCTL);
+
+	// debugctl |= 0x41;
+	// wrmsr64 (IA32_DEBUGCTL, debugctl);
+
+	// printf ("debugctl: 0x%lx\n", (long) rdmsr32 (IA32_DEBUGCTL));
 
 	cpu_halt ();
 }

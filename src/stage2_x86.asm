@@ -679,13 +679,13 @@ entry_of_protected_mode:
 	mov esi, .p_msgCallingCCode
 	call p_print_string
 
-	jmp .end
+	extern system_memory_map
 
 	sub esp, 12
-	push dword [e820_mmap_base_address]
+	push dword [system_memory_map]
 
 	extern stage2_i386_c_entry
-	jmp stage2_i386_c_entry
+	call stage2_i386_c_entry
 
 .end:
 	hlt
@@ -897,4 +897,3 @@ p_putchar:
 ; ---------------------------------------------------
 xpos db 0
 ypos db 0
-e820_mmap_base_address dd 0
