@@ -159,5 +159,13 @@ __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (Syste
 	printf ("bts buffer base: %llx, index: %llx\n",
 			dsbma->bts_buffer_base, dsbma->bts_index);
 
+	printf ("test: %llx\n",
+			*((long long *) (intptr_t) dsbma->bts_index));
+
+	for (int i = 0; i < 1000000; i++)
+		asm volatile ("nop");
+
+	printf ("then we'll hup.\n");
+
 	cpu_halt ();
 }
