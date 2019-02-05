@@ -88,7 +88,7 @@ uint32_t PageFrameAllocator_allocate (PageFrameAllocator *pfa)
 		if ((pfa->bitmap[i / 8] & (1 << (i % 8))) == 0)
 		{
 			PageFrameAllocator_mark_used (pfa, i);
-			return i;
+			return i * 0x1000;
 		}
 	}
 

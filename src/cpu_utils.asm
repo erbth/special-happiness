@@ -46,6 +46,32 @@ wrmsr64:
 	ret
 
 
+; Function:   hypercall0
+; Purpose:    to perform a hypercall without an argument
+; Parameters: uint32_t nr
+; CC:         cdecl
+	global hypercall0
+hypercall0:
+	mov eax, [esp + 4]
+	vmcall
+	ret
+
+; Function:   hypercall1
+; Purpose:    to perform a hypercall with 1 argument
+; Parameters: uint32_t nr, uint32_t arg
+; CC:         cdecl
+	global hypercall1
+hypercall1:
+	push ebx
+
+	mov eax, [esp + 8]
+	mov ebx, [esp + 12]
+	vmcall
+
+	pop ebx
+	ret
+
+
 ; Function:   read_tsc
 ; Purpose:    to read the TSC using rdtsc
 ; Parameters: None

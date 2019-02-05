@@ -7,5 +7,6 @@
 #define IA32_PLATFORM_ID								0x17
 #define IA32_APIC_BASE									0x1b
 #define IA32_DEBUGCTL									0x1d9
+#define IA32_DS_AREA									0x600
 
 #endif /* MSR_H */

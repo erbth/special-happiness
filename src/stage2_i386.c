@@ -90,6 +90,18 @@ __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (Syste
 			(intptr_t) pfa.bitmap / pfa.frame_size,
 			pfa.bitmap_size / pfa.frame_size);
 
+	/* The system memory map */
+	for (SystemMemoryMap_entry *cme = mmap; cme; cme = cme->next)
+	{
+		if (cme->type != SYSTEM_MEMORY_MAP_ENTRY_FREE)
+		{
+			PageFrameAllocator_mark_range_used (
+					&pfa,
+					(intptr_t) cme->start,
+					cme->size);
+		}
+	}
+
 	/* Initialize the memory allocator */
 	/* MemoryAllocator ma;
 
@@ -100,6 +112,7 @@ __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (Syste
 	printf ("APIC base: 0x%llx\n", (long long) rdmsr64 (IA32_APIC_BASE));
 
 	printf ("debugctl: 0x%lx\n", (long) rdmsr32 (IA32_DEBUGCTL));
+	printf ("ds area:  0x%llx\n", (long long) rdmsr64 (IA32_DS_AREA));
 
 	// uint64_t debugctl = rdmsr64 (IA32_DEBUGCTL);
 
@@ -107,6 +120,44 @@ __attribute__((cdecl)) __attribute__((noreturn)) void stage2_i386_c_entry (Syste
 	// wrmsr64 (IA32_DEBUGCTL, debugctl);
 
 	// printf ("debugctl: 0x%lx\n", (long) rdmsr32 (IA32_DEBUGCTL));
+
+	/* volatile uint8_t* p1 = (void*) (intptr_t) PageFrameAllocator_allocate (&pfa);
+	volatile uint8_t* p2 = (void*) (intptr_t) PageFrameAllocator_allocate (&pfa);
+
+
+	printf ("p1 is at 0x%x, p2 at 0x%x.\n", (intptr_t) p1, (intptr_t) p2);
+
+	// p1[0] = 1;
+	p2[0] = 2;
+
+	printf ("p1[0] = %d, p2[0] = %d\n", (int) p1[0], (int) p2[0]);
+
+	hypercall1 (11, (intptr_t) p1);
+	hypercall1 (11, (intptr_t) p2); */
+
+	struct ds_buffer_management_area {
+			uint64_t bts_buffer_base;
+			uint64_t bts_index;
+			uint64_t bts_absolute_maximum;
+			uint64_t bts_interrupt_threshold;
+
+			uint64_t pebs_buffer_base;
+			uint64_t pebs_index;
+			uint64_t pebs_absolute_maximum;
+			uint64_t pebs_interrupt_threshold;
+			uint64_t pebs_counter_reset;
+			uint64_t res;
+	} __attribute__((packed)) *dsbma;
+
+	dsbma = (void*) 0x10000000;
+
+	printf ("bts buffer base: %llx, index: %llx\n",
+			dsbma->bts_buffer_base, dsbma->bts_index);
+
+	hypercall1 (11, (intptr_t) dsbma);
+
+	printf ("bts buffer base: %llx, index: %llx\n",
+			dsbma->bts_buffer_base, dsbma->bts_index);
 
 	cpu_halt ();
 }
